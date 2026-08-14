@@ -742,13 +742,47 @@ async function loadOnlineProfileAndSave(user, fallbackUsername=""){
 }
 
 async function refreshGameAdminAccess(){
+  // Reset first so a previous player's admin flag can never leak into another account.
   state.isGameAdmin=false;
   const user=window.gameOnlineAuthUser;
-  if(!user?.id || !window.supabaseClient) return false;
-  const {data,error}=await window.supabaseClient.from('game_admins').select('auth_user_id').eq('auth_user_id',user.id).maybeSingle();
-  if(error){ console.warn('Admin access check failed:',error.message); return false; }
-  state.isGameAdmin=!!data;
-  return state.isGameAdmin;
+  if(!user?.id || !window.supabaseClient){
+    applyGameAdminAccess?.();
+    return false;
+  }
+
+  let allowed=false;
+  let adminCheckError=null;
+
+  // Primary check: the real Supabase Auth UUID must be registered in game_admins.
+  try{
+    const {data,error}=await window.supabaseClient
+      .from('game_admins')
+      .select('auth_user_id')
+      .eq('auth_user_id',user.id)
+      .maybeSingle();
+    if(error) adminCheckError=error;
+    else allowed=!!data;
+  }catch(err){
+    adminCheckError=err;
+  }
+
+  // Safe compatibility fallback for the built-in owner account only.
+  // This keeps the in-game Admin button usable while game_admins/RLS is being tested,
+  // without granting admin access to any other username.
+  const currentUsername=normalizeAccountUsername(state?.username);
+  const ownerUsername=normalizeAccountUsername(RESERVED_ADMIN_USERNAME || GAME_ADMIN_USERNAME || 'opchan');
+  if(!allowed && currentUsername && currentUsername===ownerUsername){
+    allowed=true;
+  }
+
+  state.isGameAdmin=allowed;
+  if(adminCheckError && !allowed){
+    console.warn('Admin access check failed:',adminCheckError.message||adminCheckError);
+  }
+
+  // Update the in-game buttons immediately after every login/role refresh.
+  if(typeof applyGameAdminAccess==='function') applyGameAdminAccess();
+  return allowed;
 }
 
 document.getElementById("registerButton").addEventListener("click", async () => {
@@ -827,6 +861,8 @@ function showGame() {
   document.getElementById("playerName").textContent = `ผู้เล่น: ${state.username}`;
   syncPassTicketTimer();
   render();
+  // Show/hide the in-game Admin button from the role that was just resolved.
+  if(typeof applyGameAdminAccess==='function') applyGameAdminAccess();
   openActivityPopup();
 }
 
