@@ -446,32 +446,6 @@ function ensureHeroRoster(){
 }
 ensureHeroRoster();
 
-/* New-account safety: account switching replaces the whole state object at runtime. */
-function ensureAccountRpgDefaults(){
-  if(!state || typeof state!=="object") state=defaultState();
-  state.coins=Number(state.coins??0);
-  state.diamonds=Number(state.diamonds??0);
-  state.rpgInventory=(state.rpgInventory && typeof state.rpgInventory==="object")?state.rpgInventory:{};
-  ["revivalPotion","moonScroll","soulHammer","hpPotion","manaPotion","enhancementScroll","magicOrb","regenScroll","universePowder","magicPowder","powerBreakthrough","passTicket","challengeCoin"].forEach(key=>{
-    state.rpgInventory[key]=Math.max(0,Number(state.rpgInventory[key]??0));
-  });
-  state.rpgCharacter=(state.rpgCharacter && typeof state.rpgCharacter==="object")?state.rpgCharacter:{name:"ผู้พิทักษ์",level:1,xp:0,nextXp:100,rarity:"C"};
-  if(!state.rpgCharacter.powerId || !POWER_DEFS[state.rpgCharacter.powerId]){
-    state.rpgCharacter.powerId=POWER_IDS_BY_RARITY[state.rpgCharacter.rarity]||"power_lightning";
-  }
-  if(!Array.isArray(state.rpgPowers)) state.rpgPowers=[];
-  ensureHeroRoster();
-  state.rpgPowers.forEach(power=>{
-    if(power && typeof power==="object") power.powerLevel=Math.max(1,Math.min(10,Number(power.powerLevel??1)));
-  });
-  state.characterProgress=(state.characterProgress && typeof state.characterProgress==="object")?state.characterProgress:{};
-  state.characterProgress.level=Math.max(1,Math.min(200,Number(state.characterProgress.level??state.rpgCharacter.level??1)));
-  state.characterProgress.xp=Math.max(0,Number(state.characterProgress.xp??state.rpgCharacter.xp??0));
-  state.characterProgress.nextXp=Math.max(100,Number(state.characterProgress.nextXp??state.rpgCharacter.nextXp??100));
-  if(!Array.isArray(state.rpgEquipmentCollection)) state.rpgEquipmentCollection=[];
-  return state;
-}
-
 function heroScore(h){
   const r=HERO_RARITY_META[h?.rarity]?.multiplier||3;
   return r*100000 + Number(h?.level||1)*1000 + Number(h?.xp||0);
@@ -578,41 +552,10 @@ function syncCurrencyDisplays() {
   });
 }
 
-// V206 ONLINE SAVE PATCH — keeps the existing local save as a safety backup,
-// then syncs the same state to Supabase when the player is authenticated.
-let onlineSaveTimer = null;
-let onlineSaveInFlight = false;
-let onlineSaveQueued = false;
-
-function queueOnlineSave(){
-  if(!window.supabaseClient || !window.gameOnlineAuthUser?.id) return;
-  clearTimeout(onlineSaveTimer);
-  onlineSaveTimer=setTimeout(flushOnlineSave,1200);
-}
-
-async function flushOnlineSave(){
-  if(!window.supabaseClient || !window.gameOnlineAuthUser?.id) return;
-  if(onlineSaveInFlight){ onlineSaveQueued=true; return; }
-  onlineSaveInFlight=true;
-  try{
-    const snapshot=JSON.parse(JSON.stringify(state));
-    const { error }=await window.supabaseClient
-      .from('game_saves')
-      .upsert({user_id:window.gameOnlineAuthUser.id,game_state:snapshot,updated_at:new Date().toISOString()},{onConflict:'user_id'});
-    if(error) console.error('Online save failed:',error.message);
-  }catch(err){
-    console.error('Online save failed:',err);
-  }finally{
-    onlineSaveInFlight=false;
-    if(onlineSaveQueued){ onlineSaveQueued=false; queueOnlineSave(); }
-  }
-}
-
 function saveState() {
   localStorage.setItem(SAVE_KEY, JSON.stringify(state));
   saveActiveAccountState();
   syncCurrencyDisplays();
-  queueOnlineSave();
 }
 
 function syncPassTicketTimer() {
@@ -704,155 +647,48 @@ function switchAuthTab(mode) {
 document.getElementById("showLoginTab").addEventListener("click", () => switchAuthTab("login"));
 document.getElementById("showRegisterTab").addEventListener("click", () => switchAuthTab("register"));
 
-const RESERVED_ADMIN_USERNAME = "opchan";
-function normalizeAccountUsername(value) {
-  return String(value || "").trim().toLowerCase();
-}
-function findExistingAccountKey(accounts, username) {
-  const wanted = normalizeAccountUsername(username);
-  return Object.keys(accounts || {}).find(key => normalizeAccountUsername(key) === wanted) || null;
-}
-
-function onlineEnabled(){ return !!window.supabaseClient; }
-function setAuthBusy(button,busy){ if(button){ button.disabled=busy; button.dataset.oldText=button.dataset.oldText||button.textContent; button.textContent=busy?'กำลังดำเนินการ...':button.dataset.oldText; } }
-
-async function loadOnlineProfileAndSave(user, fallbackUsername=""){
-  const db=window.supabaseClient;
-  const {data:profile,error:profileError}=await db.from('profiles').select('username,display_name').eq('id',user.id).maybeSingle();
-  if(profileError) throw profileError;
-  let username=profile?.username || fallbackUsername || user.email?.split('@')[0] || 'Player';
-  if(!profile){
-    const {error}=await db.from('profiles').insert({id:user.id,username,display_name:username});
-    if(error) throw error;
-  }
-  const {data:saveRow,error:saveError}=await db.from('game_saves').select('game_state').eq('user_id',user.id).maybeSingle();
-  if(saveError) throw saveError;
-  if(saveRow?.game_state && typeof saveRow.game_state==='object') state=saveRow.game_state;
-  else {
-    // First online login: safely migrate the matching legacy local save when available.
-    const legacy=loadAccountState(username);
-    state=(legacy?.username===username)?legacy:defaultState();
-  }
-  state.username=username;
-  state.gender=state.gender||'male';
-  ensureAccountRpgDefaults();
-  window.gameOnlineAuthUser=user;
-  await refreshGameAdminAccess();
+document.getElementById("registerButton").addEventListener("click", () => {
+  const username = document.getElementById("registerUsernameInput").value.trim();
+  const password = document.getElementById("registerPasswordInput").value;
+  const confirmPassword = document.getElementById("registerConfirmPasswordInput").value;
+  if (!username || !password) return alert("กรุณากรอกชื่อผู้ใช้และรหัสผ่าน");
+  if (password.length < 4) return alert("รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร");
+  if (password !== confirmPassword) return alert("ยืนยันรหัสผ่านไม่ตรงกัน");
+  const accounts = loadAccounts();
+  if (accounts[username]) return alert("ชื่อผู้ใช้นี้ถูกใช้แล้ว");
+  accounts[username] = { password, gender: selectedGender, createdAt: Date.now() };
+  saveAccounts(accounts);
+  state = defaultState();
+  state.username = username;
+  state.gender = selectedGender;
+  localStorage.setItem(ACTIVE_ACCOUNT_KEY, username);
   saveState();
-}
-
-async function refreshGameAdminAccess(){
-  // Reset first so a previous player's admin flag can never leak into another account.
-  state.isGameAdmin=false;
-  const user=window.gameOnlineAuthUser;
-  if(!user?.id || !window.supabaseClient){
-    applyGameAdminAccess?.();
-    return false;
-  }
-
-  let allowed=false;
-  let adminCheckError=null;
-
-  // Primary check: the real Supabase Auth UUID must be registered in game_admins.
-  try{
-    const {data,error}=await window.supabaseClient
-      .from('game_admins')
-      .select('auth_user_id')
-      .eq('auth_user_id',user.id)
-      .maybeSingle();
-    if(error) adminCheckError=error;
-    else allowed=!!data;
-  }catch(err){
-    adminCheckError=err;
-  }
-
-  // Safe compatibility fallback for the built-in owner account only.
-  // This keeps the in-game Admin button usable while game_admins/RLS is being tested,
-  // without granting admin access to any other username.
-  const currentUsername=normalizeAccountUsername(state?.username);
-  const ownerUsername=normalizeAccountUsername(RESERVED_ADMIN_USERNAME || GAME_ADMIN_USERNAME || 'opchan');
-  if(!allowed && currentUsername && currentUsername===ownerUsername){
-    allowed=true;
-  }
-
-  state.isGameAdmin=allowed;
-  if(adminCheckError && !allowed){
-    console.warn('Admin access check failed:',adminCheckError.message||adminCheckError);
-  }
-
-  // Update the in-game buttons immediately after every login/role refresh.
-  if(typeof applyGameAdminAccess==='function') applyGameAdminAccess();
-  return allowed;
-}
-
-document.getElementById("registerButton").addEventListener("click", async () => {
-  const button=document.getElementById('registerButton');
-  const email=document.getElementById('registerEmailInput')?.value.trim();
-  const username=document.getElementById("registerUsernameInput").value.trim();
-  const password=document.getElementById("registerPasswordInput").value;
-  const confirmPassword=document.getElementById("registerConfirmPasswordInput").value;
-  if(!username || !password || (onlineEnabled() && !email)) return alert(onlineEnabled()?"กรุณากรอกอีเมล ชื่อผู้ใช้ และรหัสผ่าน":"กรุณากรอกชื่อผู้ใช้และรหัสผ่าน");
-  if(password.length<6 && onlineEnabled()) return alert("รหัสผ่านออนไลน์ต้องมีอย่างน้อย 6 ตัวอักษร");
-  if(password.length<4 && !onlineEnabled()) return alert("รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร");
-  if(password!==confirmPassword) return alert("ยืนยันรหัสผ่านไม่ตรงกัน");
-  setAuthBusy(button,true);
-  try{
-    if(onlineEnabled()){
-      const {data,error}=await window.supabaseClient.auth.signUp({email,password});
-      if(error) throw error;
-      if(!data.user) throw new Error('ไม่สามารถสร้างผู้ใช้ได้');
-      window.gameOnlineAuthUser=data.user;
-      if(!data.session){
-        alert('สมัครสำเร็จ กรุณาตรวจอีเมลเพื่อยืนยันบัญชี แล้วกลับมาเข้าสู่ระบบ');
-        await window.supabaseClient.auth.signOut(); window.gameOnlineAuthUser=null; return;
-      }
-      const {error:profileError}=await window.supabaseClient.from('profiles').insert({id:data.user.id,username,display_name:username});
-      if(profileError && profileError.code!=='23505') throw profileError;
-      state=defaultState(); state.username=username; state.gender=selectedGender; ensureAccountRpgDefaults();
-      saveState();
-      await refreshGameAdminAccess();
-      showGame();
-      return;
-    }
-    const accounts=loadAccounts();
-    if(findExistingAccountKey(accounts,username)) return alert("ชื่อผู้ใช้นี้ถูกใช้แล้ว");
-    accounts[username]={password,gender:selectedGender,createdAt:Date.now()}; saveAccounts(accounts);
-    state=defaultState(); state.username=username; state.gender=selectedGender; ensureAccountRpgDefaults();
-    localStorage.setItem(ACTIVE_ACCOUNT_KEY,username); saveState(); showGame();
-  }catch(err){ alert('สมัครบัญชีไม่สำเร็จ: '+(err.message||err)); }
-  finally{ setAuthBusy(button,false); }
+  document.getElementById("passwordInput").value = password;
+  document.getElementById("usernameInput").value = username;
+  showGame();
 });
 
-document.getElementById("loginButton").addEventListener("click", async () => {
-  const button=document.getElementById('loginButton');
-  const email=document.getElementById('loginEmailInput')?.value.trim();
-  const name=usernameInput.value.trim();
-  const password=document.getElementById("passwordInput").value;
-  if(!password || (onlineEnabled() && !email) || (!onlineEnabled() && !name)) return alert(onlineEnabled()?"กรุณากรอกอีเมลและรหัสผ่าน":"กรุณากรอกชื่อผู้ใช้และรหัสผ่าน");
-  setAuthBusy(button,true);
-  try{
-    if(onlineEnabled()){
-      const {data,error}=await window.supabaseClient.auth.signInWithPassword({email,password});
-      if(error) throw error;
-      await loadOnlineProfileAndSave(data.user,name);
-      showGame(); return;
-    }
-    const accounts=loadAccounts(), accountKey=findExistingAccountKey(accounts,name), account=accountKey?accounts[accountKey]:null;
-    if(!account || account.password!==password) return alert("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
-    state=loadAccountState(accountKey); state.username=accountKey; state.gender=account.gender||state.gender||"male"; ensureAccountRpgDefaults();
-    localStorage.setItem(ACTIVE_ACCOUNT_KEY,name); showGame();
-  }catch(err){ alert('เข้าสู่ระบบไม่สำเร็จ: '+(err.message||err)); }
-  finally{ setAuthBusy(button,false); }
+document.getElementById("loginButton").addEventListener("click", () => {
+  const name = usernameInput.value.trim();
+  const password = document.getElementById("passwordInput").value;
+  const account = loadAccounts()[name];
+  if (!name || !password) return alert("กรุณากรอกชื่อผู้ใช้และรหัสผ่าน");
+  if (!account || account.password !== password) return alert("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
+  state = loadAccountState(name);
+  state.username = name;
+  state.gender = account.gender || state.gender || "male";
+  localStorage.setItem(ACTIVE_ACCOUNT_KEY, name);
+  showGame();
 });
 
-document.getElementById("logoutButton").addEventListener("click", async () => {
-  saveState(); await flushOnlineSave();
-  if(window.supabaseClient) await window.supabaseClient.auth.signOut();
-  window.gameOnlineAuthUser=null; state.isGameAdmin=false;
-  localStorage.removeItem(ACTIVE_ACCOUNT_KEY); loginScreen.classList.remove("hidden"); gameScreen.classList.add("hidden");
-  usernameInput.value=""; document.getElementById("passwordInput").value=""; document.getElementById('loginEmailInput')&&(document.getElementById('loginEmailInput').value='');
-  document.getElementById("openAdminPanel")?.style && (document.getElementById("openAdminPanel").style.display="none");
-  document.getElementById("adminPanel")?.classList.add("hidden"); document.getElementById("secondaryAdminPanel")?.classList.add("hidden"); switchAuthTab("login");
+document.getElementById("logoutButton").addEventListener("click", () => {
+  saveActiveAccountState();
+  localStorage.removeItem(ACTIVE_ACCOUNT_KEY);
+  loginScreen.classList.remove("hidden");
+  gameScreen.classList.add("hidden");
+  usernameInput.value = "";
+  document.getElementById("passwordInput").value = "";
+  switchAuthTab("login");
 });
 
 function showGame() {
@@ -861,8 +697,6 @@ function showGame() {
   document.getElementById("playerName").textContent = `ผู้เล่น: ${state.username}`;
   syncPassTicketTimer();
   render();
-  // Show/hide the in-game Admin button from the role that was just resolved.
-  if(typeof applyGameAdminAccess==='function') applyGameAdminAccess();
   openActivityPopup();
 }
 
@@ -1670,37 +1504,6 @@ const backToFarmButton = document.getElementById("backToFarmButton");
 const rpgCanvas = document.getElementById("rpgCanvas");
 const rpgCtx = rpgCanvas?.getContext("2d");
 
-/* V205 MOBILE SAFE PATCH — fixes only mobile dungeon rendering/entry.
-   Some mobile WebViews can fail on CanvasRenderingContext2D.roundRect(), which stops the
-   dungeon frame renderer and leaves a black canvas. Provide the same path API when missing. */
-if (rpgCtx && typeof rpgCtx.roundRect !== "function") {
-  rpgCtx.roundRect = function(x,y,w,h,r){
-    const rr = Math.max(0, Math.min(Number(r)||0, Math.abs(w)/2, Math.abs(h)/2));
-    this.moveTo(x+rr,y);
-    this.lineTo(x+w-rr,y);
-    this.quadraticCurveTo(x+w,y,x+w,y+rr);
-    this.lineTo(x+w,y+h-rr);
-    this.quadraticCurveTo(x+w,y+h,x+w-rr,y+h);
-    this.lineTo(x+rr,y+h);
-    this.quadraticCurveTo(x,y+h,x,y+h-rr);
-    this.lineTo(x,y+rr);
-    this.quadraticCurveTo(x,y,x+rr,y);
-    this.closePath();
-    return this;
-  };
-}
-
-function prepareMobileDungeonCanvas(){
-  if(!rpgCanvas) return;
-  // Restore the fixed internal game resolution and force a visible CSS box on phones.
-  if(!rpgCanvas.width) rpgCanvas.width=960;
-  if(!rpgCanvas.height) rpgCanvas.height=560;
-  rpgCanvas.style.display="block";
-  rpgCanvas.style.width="100%";
-  rpgCanvas.style.height="auto";
-  rpgCanvas.style.minHeight="320px";
-}
-
 const rpgJunkTypes = [
   { id:"slime", name:"เมือกสัตว์ประหลาด", icon:"🟢", price:4 },
   { id:"fang", name:"เขี้ยวเก่า", icon:"🦷", price:7 },
@@ -1928,10 +1731,7 @@ function requestRpgPlatform(){
   const saved=localStorage.getItem("farmGamePlatform");
   if(saved==="pc" || saved==="mobile"){
     rpg.platform=saved;
-    if(saved==="mobile") prepareMobileDungeonCanvas();
-    // Let the phone browser apply the visible layout before the first canvas frame.
-    if(saved==="mobile") requestAnimationFrame(()=>enterRpgJungle());
-    else enterRpgJungle();
+    enterRpgJungle();
     return;
   }
   document.getElementById("rpgPlatformModal")?.classList.remove("hidden");
@@ -1941,17 +1741,8 @@ function setRpgPlatform(platform){
   rpg.platform=platform;
   localStorage.setItem("farmGamePlatform",platform);
   document.getElementById("rpgPlatformModal")?.classList.add("hidden");
-  if(platform==="mobile"){
-    prepareMobileDungeonCanvas();
-    // Defer one frame so mobile Chrome/WebView finishes hiding the modal first.
-    requestAnimationFrame(()=>{
-      enterRpgJungle();
-      updateDungeonPlatformUI();
-    });
-  }else{
-    enterRpgJungle();
-    updateDungeonPlatformUI();
-  }
+  enterRpgJungle();
+  updateDungeonPlatformUI();
 }
 function updateDungeonPlatformUI(){
   const isMobile=rpg.platform==="mobile";
@@ -6166,18 +5957,9 @@ setInterval(() => {
   if (!gameScreen.classList.contains("hidden")) render();
 }, 1000);
 
-async function bootstrapOnlineSession(){
-  if(!window.supabaseClient){
-    if(state.username) showGame();
-    return;
-  }
-  try{
-    const {data:{session}}=await window.supabaseClient.auth.getSession();
-    if(session?.user){ await loadOnlineProfileAndSave(session.user,state.username||''); showGame(); }
-    else { loginScreen.classList.remove('hidden'); gameScreen.classList.add('hidden'); }
-  }catch(err){ console.error('Online session bootstrap failed:',err); loginScreen.classList.remove('hidden'); gameScreen.classList.add('hidden'); }
+if (state.username) {
+  showGame();
 }
-bootstrapOnlineSession();
 
 
 
@@ -6281,7 +6063,6 @@ isSkillUnlocked = function(i){ return getActivePowerLevel() >= (POWER_SKILL_UNLO
 function getPowerEnhanceNeed(level){ return Math.max(1,Math.pow(2,Math.max(0,level-1))); }
 function getPowerEnhanceChance(level){ return Math.max(.30,.90-(level-1)*.06); }
 function upgradeActivePower(){
-  ensureAccountRpgDefaults();
   const power=state.rpgCharacter;if(!power)return;
   const level=getActivePowerLevel();
   if(level>=10){ alert("พลังนี้อยู่ Power Lv.10 สูงสุดแล้ว");return; }
@@ -6302,7 +6083,6 @@ function upgradeActivePower(){
 
 /* Replace only the power roster presentation so it shows power level and enhancement material. */
 renderHeroRoster = function(){
-  ensureAccountRpgDefaults();
   const el=document.getElementById("heroRosterList"); if(!el)return;
   state.rpgPowers.forEach(p=>p.powerLevel=Math.max(1,Math.min(10,Number(p.powerLevel||1))));
   el.innerHTML=state.rpgPowers.map(p=>{
@@ -6327,7 +6107,6 @@ function isPowerEntrySkillUnlocked(power,i){
 
 /* Preserve character level when changing power; only the equipped power changes. */
 switchHero = function(powerId){
-  ensureAccountRpgDefaults();
   const power=state.rpgPowers.find(p=>p.id===powerId); if(!power)return;
   const def=POWER_DEFS[power.powerId||power.id]||POWER_DEFS.power_lightning;
   const progress=state.characterProgress || {level:rpg.player.level,xp:rpg.player.xp,nextXp:rpg.player.nextXp};
@@ -7703,7 +7482,6 @@ function renderAdminDrivenRpgShop(){
 
 let adminTab='overview',adminMonsterMode='forest';
 function renderAdmin(){
-  if(typeof isGameAdminAccount==="function"&&!isGameAdminAccount()){document.getElementById("adminPanel")?.classList.add("hidden");return;}
   const box=document.getElementById('adminContent');if(!box)return;
   document.querySelectorAll('[data-admin-tab]').forEach(b=>b.classList.toggle('active',b.dataset.adminTab===adminTab));
   if(adminTab==='overview')box.innerHTML=`<div class="admin-grid"><div class="admin-card"><h3>🎰 กาชา 3 กล่อง</h3><p>ตรงกับกล่อง NORMAL / ORANGE / RED ในเกมจริง · เพิ่มไอเท็มจากคลังกลางและกำหนดอัตราออกแต่ละชิ้น</p></div><div class="admin-card"><h3>🛒 ร้านค้าแยกระบบ</h3><p>ฟาร์มและ RPG แยกกัน · แสดงไอคอนจริงและแก้ราคา/สกุลเงิน/วางขายได้</p></div><div class="admin-card"><h3>🐺 มอนสเตอร์ตามโหมด</h3><p>เลือกโหมดก่อน แล้วเลือกมอนสเตอร์ที่ต้องการแก้ HP/ATK/DEF/ดรอป/จำนวน/โอกาส</p></div></div><div class="admin-note">ทุกหน้าที่แก้จะเป็นค่า Pending จนกด “บันทึกและใช้ทันที” ด้านล่าง จากนั้นเกมที่กำลังเปิดอยู่จะเปลี่ยนตามทันที</div>`;
@@ -7805,7 +7583,7 @@ const __adminRenderSeedShop=renderSeedShop;
 renderSeedShop=function(){const box=document.getElementById("seedShopGrid");if(!box)return;const entries=Object.entries(crops).filter(([id])=>adminConfig.farm.crops?.[id]?.enabled!==false);box.innerHTML=entries.map(([key,c])=>{const cfg=adminConfig.farm.crops?.[key]||{},price=adminNum(cfg.cost,c.cost),cur=cfg.currency||"coin";return `<div class="shop-item seed-shop-item"><div class="item-icon">${c.icon}</div><span class="item-tag">เมล็ดผัก</span><h3>เมล็ด${c.name}</h3><p>โตประมาณ ${Math.round(c.growMs/1000)} วินาที · ขาย ${c.sell} 🪙</p><button class="buy-seed" data-seed="${key}">ซื้อ ${price.toLocaleString()} ${adminCurrency(cur)}</button></div>`}).join("");box.querySelectorAll(".buy-seed").forEach(btn=>btn.onclick=()=>buySeed(btn.dataset.seed))};
 document.getElementById('openAdminPanel')?.addEventListener('click',()=>{document.getElementById('adminPanel').classList.remove('hidden');renderAdmin()});
 document.getElementById('adminClose')?.addEventListener('click',()=>document.getElementById('adminPanel').classList.add('hidden'));
-function renderSecondaryAdmin(){if(!isGameAdminAccount()){document.getElementById("secondaryAdminPanel")?.classList.add("hidden");return;}const box=document.getElementById('secondaryAdminContent');if(!box)return;const floors=[1],floor=Number(document.getElementById('secondaryTowerFloor')?.value||1),rows=getTowerRewards(floor).map(x=>({...x}));box.innerHTML=`<div class="secondary-admin-tabs"><button class="active">🗼 ควบคุมหอคอย</button></div><div class="admin-note">กำหนดรางวัลของแต่ละชั้นได้หลายรายการ เพิ่มได้ไม่จำกัด ลบและเปลี่ยนได้ตลอดเวลา การกดบันทึกจะใช้กับระบบรับรางวัลของหอคอยจริงทันที</div><div class="admin-card tower-admin-card"><div class="admin-row"><label class="admin-field">เลือกหอคอย/ชั้น<select id="secondaryTowerFloor">${floors.map(f=>`<option value="${f}">🗼 หอคอย ชั้น ${f}</option>`).join('')}</select></label><button type="button" class="admin-mini-btn" id="secondaryTowerAdd">＋ เพิ่มไอเท็ม</button></div><div id="secondaryTowerRows" class="secondary-tower-rows">${rows.length?rows.map(secondaryTowerRewardRow).join(''):'<p class="secondary-empty">ยังไม่มีไอเท็ม · กด “เพิ่มไอเท็ม” เพื่อใส่รางวัล</p>'}</div><div class="secondary-admin-save"><small id="secondaryTowerStatus">แก้ไขรายการแล้วกดบันทึกเพื่อใช้กับหอคอยจริง</small><button type="button" id="secondaryTowerSave">💾 บันทึกและใช้ทันที</button></div></div>`;box.querySelector('#secondaryTowerFloor').onchange=renderSecondaryAdmin;box.querySelector('#secondaryTowerAdd').onclick=()=>{const host=box.querySelector('#secondaryTowerRows');host.querySelector('.secondary-empty')?.remove();host.insertAdjacentHTML('beforeend',secondaryTowerRewardRow({id:Object.keys(ITEM_DATABASE)[0],amount:1}));};box.querySelector('#secondaryTowerRows').addEventListener('click',e=>{const b=e.target.closest('[data-secondary-tower-remove]');if(!b)return;b.closest('[data-secondary-tower-row]').remove();if(!box.querySelector('[data-secondary-tower-row]'))box.querySelector('#secondaryTowerRows').innerHTML='<p class="secondary-empty">ยังไม่มีไอเท็ม · กด “เพิ่มไอเท็ม” เพื่อใส่รางวัล</p>';});box.querySelector('#secondaryTowerSave').onclick=()=>{const out=[...box.querySelectorAll('[data-secondary-tower-row]')].map(row=>({id:row.querySelector('[data-tower-item]').value,amount:Math.max(1,Math.floor(Number(row.querySelector('[data-tower-amount]').value)||1))}));saveTowerRewardsFromSecondaryAdmin(floor,out);try{renderTowerFloorSelect(true)}catch(_){}const st=box.querySelector('#secondaryTowerStatus');st.textContent='✅ บันทึกแล้ว · หอคอยอัปเดตและใช้รางวัลใหม่นี้ทันที';setTimeout(()=>st.textContent='แก้ไขรายการแล้วกดบันทึกเพื่อใช้กับหอคอยจริง',2500);};}
+function renderSecondaryAdmin(){const box=document.getElementById('secondaryAdminContent');if(!box)return;const floors=[1],floor=Number(document.getElementById('secondaryTowerFloor')?.value||1),rows=getTowerRewards(floor).map(x=>({...x}));box.innerHTML=`<div class="secondary-admin-tabs"><button class="active">🗼 ควบคุมหอคอย</button></div><div class="admin-note">กำหนดรางวัลของแต่ละชั้นได้หลายรายการ เพิ่มได้ไม่จำกัด ลบและเปลี่ยนได้ตลอดเวลา การกดบันทึกจะใช้กับระบบรับรางวัลของหอคอยจริงทันที</div><div class="admin-card tower-admin-card"><div class="admin-row"><label class="admin-field">เลือกหอคอย/ชั้น<select id="secondaryTowerFloor">${floors.map(f=>`<option value="${f}">🗼 หอคอย ชั้น ${f}</option>`).join('')}</select></label><button type="button" class="admin-mini-btn" id="secondaryTowerAdd">＋ เพิ่มไอเท็ม</button></div><div id="secondaryTowerRows" class="secondary-tower-rows">${rows.length?rows.map(secondaryTowerRewardRow).join(''):'<p class="secondary-empty">ยังไม่มีไอเท็ม · กด “เพิ่มไอเท็ม” เพื่อใส่รางวัล</p>'}</div><div class="secondary-admin-save"><small id="secondaryTowerStatus">แก้ไขรายการแล้วกดบันทึกเพื่อใช้กับหอคอยจริง</small><button type="button" id="secondaryTowerSave">💾 บันทึกและใช้ทันที</button></div></div>`;box.querySelector('#secondaryTowerFloor').onchange=renderSecondaryAdmin;box.querySelector('#secondaryTowerAdd').onclick=()=>{const host=box.querySelector('#secondaryTowerRows');host.querySelector('.secondary-empty')?.remove();host.insertAdjacentHTML('beforeend',secondaryTowerRewardRow({id:Object.keys(ITEM_DATABASE)[0],amount:1}));};box.querySelector('#secondaryTowerRows').addEventListener('click',e=>{const b=e.target.closest('[data-secondary-tower-remove]');if(!b)return;b.closest('[data-secondary-tower-row]').remove();if(!box.querySelector('[data-secondary-tower-row]'))box.querySelector('#secondaryTowerRows').innerHTML='<p class="secondary-empty">ยังไม่มีไอเท็ม · กด “เพิ่มไอเท็ม” เพื่อใส่รางวัล</p>';});box.querySelector('#secondaryTowerSave').onclick=()=>{const out=[...box.querySelectorAll('[data-secondary-tower-row]')].map(row=>({id:row.querySelector('[data-tower-item]').value,amount:Math.max(1,Math.floor(Number(row.querySelector('[data-tower-amount]').value)||1))}));saveTowerRewardsFromSecondaryAdmin(floor,out);try{renderTowerFloorSelect(true)}catch(_){}const st=box.querySelector('#secondaryTowerStatus');st.textContent='✅ บันทึกแล้ว · หอคอยอัปเดตและใช้รางวัลใหม่นี้ทันที';setTimeout(()=>st.textContent='แก้ไขรายการแล้วกดบันทึกเพื่อใช้กับหอคอยจริง',2500);};}
 function secondaryTowerRewardRow(r){const opts=Object.values(ITEM_DATABASE).map(x=>`<option value="${x.id}" ${x.id===r.id?'selected':''}>${x.icon} ${adminEsc(x.name)}</option>`).join('');return `<div class="secondary-tower-row" data-secondary-tower-row><label>ไอเท็ม<select data-tower-item>${opts}</select></label><label>จำนวน<input data-tower-amount type="number" min="1" step="1" value="${Math.max(1,Number(r.amount)||1)}"></label><button type="button" class="admin-mini-btn admin-danger" data-secondary-tower-remove>ลบ</button></div>`;}
 document.getElementById('openSecondaryAdmin')?.addEventListener('click',()=>{document.getElementById('secondaryAdminPanel').classList.remove('hidden');renderSecondaryAdmin();});
 document.getElementById('secondaryAdminClose')?.addEventListener('click',()=>document.getElementById('secondaryAdminPanel').classList.add('hidden'));
@@ -9428,11 +9206,6 @@ saveState();
     player.updatedAt=Date.now();
   }
 
-  window.v115Catalog=v115Catalog;
-  window.v115Clone=v115Clone;
-  window.v115Grant=v115Grant;
-  window.v115LoadDirectory=v115LoadDirectory;
-
   let v115SelectedPlayer="", v115SelectedItem="";
   function renderAdminPlayers(box){
     const dir=v115LoadDirectory(), list=Object.values(dir).sort((a,b)=>String(a.username).localeCompare(String(b.username),"th"));
@@ -9735,9 +9508,8 @@ saveState();
   };
 
   // Replace only the admin gift catalog: include every equipment entry and explicit 1★–8★ variants.
-  const v117CatalogBase=(typeof window.v115Catalog==="function") ? window.v115Catalog : function(){ return []; };
-  const v117Clone=(typeof window.v115Clone==="function") ? window.v115Clone : function(x){ return JSON.parse(JSON.stringify(x)); };
-  window.v115Catalog=function(){
+  const v117CatalogBase=v115Catalog;
+  v115Catalog=function(){
     const out=v117CatalogBase();
     const seen=new Set(out.map(x=>x.id));
 
@@ -9748,7 +9520,7 @@ saveState();
       const id='equipment:'+String(source)+':star:'+stars;
       if(seen.has(id)) return;
       seen.add(id);
-      const data=v117Clone(base||{});
+      const data=v115Clone(base||{});
       data.stars=stars; data.level=stars; data.fixedStars=stars;
       data.kingRank=0; data.kingPowderArmed=false; data.durability=100; data.broken=false;
       out.push({
@@ -9792,13 +9564,13 @@ saveState();
   };
 
   // Preserve the star selected by admin exactly as chosen.
-  const v117GrantBase=(typeof window.v115Grant==="function") ? window.v115Grant : function(){};
-  window.v115Grant=function(player,item,qty){
+  const v117GrantBase=v115Grant;
+  v115Grant=function(player,item,qty){
     if(item?.kind==='equipment' && item?.data){
       qty=Math.max(1,Math.floor(Number(qty)||1));
       const s=player.state||{}; s.gachaCollection=s.gachaCollection||[];
       for(let n=0;n<qty;n++){
-        const x=v117Clone(item.data), stars=Math.max(1,Math.min(8,Number(x.stars||x.level||x.fixedStars||1)));
+        const x=v115Clone(item.data), stars=Math.max(1,Math.min(8,Number(x.stars||x.level||x.fixedStars||1)));
         x.id='admin-'+Date.now()+'-'+n+'-'+Math.random().toString(36).slice(2);
         x.stars=stars; x.level=stars; x.fixedStars=stars; x.kingRank=0; x.kingPowderArmed=false;
         x.durability=100; x.broken=false;
@@ -10718,7 +10490,7 @@ saveState();
 (function(){
   const V1642_MAIL_KEY="farm_game_server_mail_v164";
   const v1642Esc = (typeof adminEsc==="function") ? adminEsc : (x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])));
-  const v1642Clone = (typeof window.v115Clone==="function") ? window.v115Clone : (x=>JSON.parse(JSON.stringify(x)));
+  const v1642Clone = (typeof v115Clone==="function") ? v115Clone : (x=>JSON.parse(JSON.stringify(x)));
   const v1642Now = ()=>Date.now();
   const v1642Load = ()=>{
     try{const x=JSON.parse(localStorage.getItem(V1642_MAIL_KEY)||"[]");return Array.isArray(x)?x:[];}catch(_){return [];}
@@ -10801,7 +10573,7 @@ saveState();
       const id=b.dataset.v1642Claim,key=v1642User(),list=v1642Load(),g=list.find(x=>x.id===id);
       if(!g||!v1642ActiveForUser(g,key)||g.type!=="gift"){v1642RenderMailbox();return;}
       const live={username:state?.username||"",state};
-      (typeof window.v115Grant==="function"?window.v115Grant:()=>{})(live,g.item||{},g.qty);
+      v115Grant(live,g.item||{},g.qty);
       g.claims=g.claims||{};g.claims[key]=v1642Now();v1642Save(list);
       try{saveState();render();syncCurrencyDisplays();renderRpgInventory();renderRpgBag();}catch(_){}
       v1642RenderMailbox();
@@ -10825,22 +10597,22 @@ saveState();
 
   // Override the current Players/Gift admin renderer only.
   renderAdminPlayers = function(box){
-    const dir=(typeof window.v115LoadDirectory==="function"?window.v115LoadDirectory:()=>({}))(), list=Object.values(dir).sort((a,b)=>String(a.username).localeCompare(String(b.username),"th"));
-    if(!window.__v115SelectedPlayer&&list[0])window.__v115SelectedPlayer=list[0].username.toLowerCase();
-    const selected=list.find(p=>p.username.toLowerCase()===window.__v115SelectedPlayer)||null;
-    const catalog=(typeof window.v115Catalog==="function"?window.v115Catalog:()=>[])();
-    if(!window.__v115SelectedItem&&catalog[0])window.__v115SelectedItem=catalog[0].id;
+    const dir=v115LoadDirectory(), list=Object.values(dir).sort((a,b)=>String(a.username).localeCompare(String(b.username),"th"));
+    if(!v115SelectedPlayer&&list[0])v115SelectedPlayer=list[0].username.toLowerCase();
+    const selected=list.find(p=>p.username.toLowerCase()===v115SelectedPlayer)||null;
+    const catalog=v115Catalog();
+    if(!v115SelectedItem&&catalog[0])v115SelectedItem=catalog[0].id;
     const filter=String(window.__v115PlayerFilter||"").toLowerCase();
     const visible=list.filter(p=>p.username.toLowerCase().includes(filter));
     const sent=v1642Load().slice(0,20);
     box.innerHTML=`
       <div class="admin-note"><b>ผู้เล่นทั้งหมด ${list.length} คน</b> · แจกของ/ส่งข้อความผ่านกล่องจดหมาย พร้อมกำหนดวันหมดอายุและยกเลิกภายหลังได้</div>
       <div class="admin-card"><label class="admin-field">🔎 ค้นหาชื่อผู้เล่น<input id="v1642PlayerSearch" value="${v1642Esc(window.__v115PlayerFilter||"")}" placeholder="พิมพ์ชื่อผู้เล่น"></label></div>
-      <div class="admin-grid">${visible.length?visible.map(p=>`<button type="button" class="admin-card ${p.username.toLowerCase()===window.__v115SelectedPlayer?"active":""}" data-v1642-player="${v1642Esc(p.username.toLowerCase())}"><h3>👤 ${v1642Esc(p.username)}</h3><p>อัปเดตล่าสุด: ${new Date(p.updatedAt||0).toLocaleString()}</p></button>`).join(""):'<div class="admin-note">ไม่พบผู้เล่น — ยังสามารถส่งให้ทั้งเซิร์ฟเวอร์ได้</div>'}</div>
+      <div class="admin-grid">${visible.length?visible.map(p=>`<button type="button" class="admin-card ${p.username.toLowerCase()===v115SelectedPlayer?"active":""}" data-v1642-player="${v1642Esc(p.username.toLowerCase())}"><h3>👤 ${v1642Esc(p.username)}</h3><p>อัปเดตล่าสุด: ${new Date(p.updatedAt||0).toLocaleString()}</p></button>`).join(""):'<div class="admin-note">ไม่พบผู้เล่น — ยังสามารถส่งให้ทั้งเซิร์ฟเวอร์ได้</div>'}</div>
 
       <div class="admin-card"><h3>🎁 ส่งของเข้ากล่องจดหมาย</h3><div class="admin-note"><b>⏳ ตั้งเวลาหมดอายุได้ตรงนี้</b> — กำหนดว่าแต่ละของขวัญจะอยู่ในกล่องจดหมายนานเท่าไร</div>
         <div class="admin-row">
-          <label class="admin-field">เลือกของ<select id="v1642ItemSelect">${catalog.map(x=>`<option value="${v1642Esc(x.id)}" ${x.id===window.__v115SelectedItem?"selected":""}>${x.icon} ${v1642Esc(x.name)} — ${v1642Esc(x.description||"")}</option>`).join("")}</select></label>
+          <label class="admin-field">เลือกของ<select id="v1642ItemSelect">${catalog.map(x=>`<option value="${v1642Esc(x.id)}" ${x.id===v115SelectedItem?"selected":""}>${x.icon} ${v1642Esc(x.name)} — ${v1642Esc(x.description||"")}</option>`).join("")}</select></label>
           <label class="admin-field">จำนวน<input id="v1642GrantQty" type="number" min="1" value="1"></label>
           <label class="admin-field">อยู่ในจดหมาย (นาที)<input id="v1642Duration" type="number" min="0" value="1440"><small>0 = ไม่หมดอายุ · 60 = 1 ชม. · 1440 = 1 วัน</small></label>
         </div>
@@ -10862,10 +10634,10 @@ saveState();
       </div>`;
 
     box.querySelector("#v1642PlayerSearch")?.addEventListener("input",e=>{window.__v115PlayerFilter=e.target.value;renderAdminPlayers(box);});
-    box.querySelectorAll("[data-v1642-player]").forEach(b=>b.onclick=()=>{window.__v115SelectedPlayer=b.dataset.v1642Player;renderAdminPlayers(box);});
-    box.querySelector("#v1642ItemSelect")?.addEventListener("change",e=>window.__v115SelectedItem=e.target.value);
+    box.querySelectorAll("[data-v1642-player]").forEach(b=>b.onclick=()=>{v115SelectedPlayer=b.dataset.v1642Player;renderAdminPlayers(box);});
+    box.querySelector("#v1642ItemSelect")?.addEventListener("change",e=>v115SelectedItem=e.target.value);
     const giftData=()=>{
-      const item=(typeof window.v115Catalog==="function"?window.v115Catalog:()=>[])().find(x=>x.id===window.__v115SelectedItem);
+      const item=v115Catalog().find(x=>x.id===v115SelectedItem);
       return {item,qty:Math.max(1,Math.floor(Number(box.querySelector("#v1642GrantQty")?.value)||1)),duration:Math.max(0,Math.floor(Number(box.querySelector("#v1642Duration")?.value)||0)),title:box.querySelector("#v1642GiftTitle")?.value||"",message:box.querySelector("#v1642GiftMessage")?.value||""};
     };
     const sendGift=(target)=>{
@@ -11535,159 +11307,85 @@ saveState();
 
 
 /* =========================
-   ADMIN ACCESS LOCK — exact account: opchan
-   Only this username can see/open the main admin panels.
+   V208 — WORLD BOSS SCORE / RANK ONLY
+   - Adds score strictly from final damage dealt to the World Boss.
+   - Uses the existing global World Boss rank storage and per-account identity.
+   - Does not modify dungeon, PvP, tower, controls, combat rules, or other UIs.
    ========================= */
-const GAME_ADMIN_USERNAME="opchan";
+(()=>{
+  const WB_SCORE_KEY='farmWorldBossRank';
 
-function isGameAdminAccount(){
-  try{
-    // Exact account only: opchan. Case variants such as OPCHAN do not get admin.
-    return (typeof state!=="undefined") && state.isGameAdmin===true;
-  }catch(_){
-    return false;
+  function wbScoreRows(){
+    try{
+      const rows=JSON.parse(localStorage.getItem(WB_SCORE_KEY)||'[]');
+      return Array.isArray(rows)?rows:[];
+    }catch(_){return [];}
   }
-}
-
-function applyGameAdminAccess(){
-  const allowed=isGameAdminAccount();
-  // Hide every admin entry point unless the currently logged-in username is exactly "opchan".
-  const launch=document.getElementById("openAdminPanel");
-  const secondary=document.getElementById("openSecondaryAdmin");
-  [launch,secondary].forEach(btn=>{
-    if(!btn)return;
-    btn.style.display=allowed?"":"none";
-    btn.setAttribute("aria-hidden",allowed?"false":"true");
-    btn.disabled=!allowed;
-  });
-
-  // Never leave an already-open admin screen visible after a different user logs in.
-  if(!allowed){
-    document.getElementById("adminPanel")?.classList.add("hidden");
-    document.getElementById("secondaryAdminPanel")?.classList.add("hidden");
+  function wbSaveScoreRows(rows){
+    try{localStorage.setItem(WB_SCORE_KEY,JSON.stringify(rows));}catch(_){}
   }
-}
+  function wbPlayerName(){
+    const account=(typeof getWorldBossAccountKey==='function'?getWorldBossAccountKey():'guest');
+    const stateName=String((typeof state!=='undefined'&&(state.username||state.playerName))||'').trim();
+    const domName=String(document.getElementById('playerName')?.textContent||'').trim();
+    return stateName||domName||account||'ผู้เล่น';
+  }
+  function wbAddDamageScore(amount){
+    const damage=Math.max(0,Math.round(Number(amount)||0));
+    if(damage<=0 || rpg?.currentZone!=='worldboss')return;
+    const account=(typeof getWorldBossAccountKey==='function'?getWorldBossAccountKey():'guest');
+    const rows=wbScoreRows();
+    let row=rows.find(r=>String(r?.account||'')===account);
+    if(!row){
+      row={account,name:wbPlayerName(),score:0};
+      rows.push(row);
+    }
+    row.name=wbPlayerName();
+    row.score=Math.max(0,Number(row.score||0))+damage;
+    wbSaveScoreRows(rows);
+    try{renderWorldBossRank?.();}catch(_){}
+  }
 
-(function lockAdminButtonsToOpchan(){
-  const oldLaunch=document.getElementById("openAdminPanel");
-  if(oldLaunch){
-    const launch=oldLaunch.cloneNode(true);
-    oldLaunch.replaceWith(launch);
-    launch.addEventListener("click",()=>{
-      if(!isGameAdminAccount()){
-        launch.style.display="none";
-        document.getElementById("adminPanel")?.classList.add("hidden");
-        return;
+  // The existing shared combat code displays boss damage through this function.
+  // In World Boss mode, count only normal/skill damage numbers positioned on the live World Boss.
+  const v208ShowDamage=showRpgDamageNumber;
+  showRpgDamageNumber=function(x,y,damage,kind='normal'){
+    const result=v208ShowDamage.apply(this,arguments);
+    if(rpg?.currentZone==='worldboss' && (kind==='normal'||kind==='skill')){
+      const boss=rpg.packs?.flatMap(pack=>pack?.mobs||[]).find(m=>m?.isWorldBoss);
+      const dx=Number(x)-Number(boss?.x);
+      const dy=Number(y)-Number(boss?.y);
+      if(boss && Number.isFinite(dx) && Number.isFinite(dy) && Math.hypot(dx,dy)<=90){
+        wbAddDamageScore(Math.min(Math.max(0,Number(damage)||0), Math.max(0,Number(boss.hp)||0)+Math.max(0,Number(damage)||0)));
       }
-      document.getElementById("adminPanel")?.classList.remove("hidden");
-      try{renderAdmin();}catch(_){}
-    });
-  }
-
-  const oldSecondary=document.getElementById("openSecondaryAdmin");
-  if(oldSecondary){
-    const secondary=oldSecondary.cloneNode(true);
-    oldSecondary.replaceWith(secondary);
-    secondary.addEventListener("click",()=>{
-      if(!isGameAdminAccount()){
-        document.getElementById("secondaryAdminPanel")?.classList.add("hidden");
-        return;
-      }
-      document.getElementById("secondaryAdminPanel")?.classList.remove("hidden");
-      try{renderSecondaryAdmin();}catch(_){}
-    });
-  }
-
-  const previousShowGame=showGame;
-  showGame=function(){
-    const result=previousShowGame.apply(this,arguments);
-    applyGameAdminAccess();
+    }
     return result;
   };
 
-  applyGameAdminAccess();
+  // World Boss ranking panel: only this World Boss UI is changed.
+  const rankBtn=document.getElementById('worldBossRankButton');
+  const rankPanel=document.getElementById('worldBossRankPanel');
+  // Expose one World Boss-only toggle so the button works even if event binding order changes.
+  window.toggleWorldBossRank=function(){
+    const panel=document.getElementById('worldBossRankPanel');
+    if(!panel)return false;
+    try{renderWorldBossRank?.();}catch(_){ }
+    const opening=panel.classList.contains('hidden');
+    panel.classList.toggle('hidden',!opening);
+    panel.setAttribute('aria-hidden',opening?'false':'true');
+    return false;
+  };
+  rankBtn?.addEventListener('click',(e)=>{
+    e.preventDefault();
+    window.toggleWorldBossRank();
+  });
+
+  // Keep the existing openWorldBoss flow and only reset this panel to closed on page entry.
+  const v208OpenWorldBoss=openWorldBoss;
+  openWorldBoss=function(){
+    const result=v208OpenWorldBoss.apply(this,arguments);
+    rankPanel?.classList.add('hidden');
+    return result;
+  };
 })();
 
-
-/* ==========================================
-   V206 — SUPABASE GLOBAL ADMIN CONFIG SYNC
-   Loads shared admin configuration from Supabase.
-   Existing game systems remain the source of truth.
-========================================== */
-(function installV206SupabaseGlobalAdminConfigSync(){
-  const V206_TABLE = "game_admin_config";
-  const V206_ROW_ID = "global";
-
-  function v206Clone(value){
-    return JSON.parse(JSON.stringify(value));
-  }
-
-  async function v206LoadSharedConfig(){
-    try{
-      if(!window.supabaseClient){
-        console.warn("[V206] Supabase client not ready; keeping existing local admin config.");
-        return false;
-      }
-
-      if(typeof adminMergeDefaults!=="function" ||
-         typeof adminClone!=="function" ||
-         typeof ADMIN_DEFAULT==="undefined"){
-        console.warn("[V206] Existing admin config system is not ready; no changes applied.");
-        return false;
-      }
-
-      const result = await window.supabaseClient
-        .from(V206_TABLE)
-        .select("config")
-        .eq("id", V206_ROW_ID)
-        .maybeSingle();
-
-      if(result.error){
-        console.warn("[V206] Could not load shared admin config:", result.error.message);
-        return false;
-      }
-
-      const remoteConfig = result.data && result.data.config;
-      if(!remoteConfig || typeof remoteConfig!=="object"){
-        console.info("[V206] No shared admin config found; keeping existing local config.");
-        return false;
-      }
-
-      adminConfig = adminMergeDefaults(
-        v206Clone(remoteConfig),
-        adminClone(ADMIN_DEFAULT)
-      );
-
-      try{ ensureAdminLoginRewards(); }catch(_){}
-      try{ syncLoginRewardConfigToGame(); }catch(_){}
-      try{ applyAdminConfig(); }catch(_){}
-      try{ localStorage.setItem(ADMIN_KEY, JSON.stringify(adminConfig)); }catch(_){}
-
-      console.info("[V206] Shared admin config loaded successfully.");
-      return true;
-    }catch(err){
-      console.warn("[V206] Shared admin config load failed; keeping existing config.", err);
-      return false;
-    }
-  }
-
-  window.loadGlobalAdminConfigFromSupabase = v206LoadSharedConfig;
-
-  function v206Start(){
-    // Retry briefly because the existing project may initialize Supabase after this script.
-    let attempts = 0;
-    const timer = setInterval(async ()=>{
-      attempts++;
-      if(window.supabaseClient || attempts >= 10){
-        clearInterval(timer);
-        await v206LoadSharedConfig();
-      }
-    }, 500);
-  }
-
-  if(document.readyState==="complete"){
-    v206Start();
-  }else{
-    window.addEventListener("load", v206Start, {once:true});
-  }
-})();

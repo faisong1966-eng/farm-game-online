@@ -26,13 +26,11 @@
         <button id="showRegisterTab" class="auth-tab" type="button">สมัครบัญชี</button>
       </div>
       <div id="loginForm" class="auth-form">
-        <input id="loginEmailInput" type="email" maxlength="120" placeholder="อีเมล">
-        <input id="usernameInput" type="text" maxlength="20" placeholder="ชื่อผู้ใช้ (ใช้สำหรับโหมดเก่า/ออฟไลน์)">
+        <input id="usernameInput" type="text" maxlength="20" placeholder="ชื่อผู้ใช้">
         <input id="passwordInput" type="password" maxlength="50" placeholder="รหัสผ่าน">
         <button id="loginButton">เข้าสู่ระบบ</button>
       </div>
       <div id="registerForm" class="auth-form hidden">
-        <input id="registerEmailInput" type="email" maxlength="120" placeholder="อีเมล">
         <input id="registerUsernameInput" type="text" maxlength="20" placeholder="ชื่อผู้ใช้ใหม่">
         <input id="registerPasswordInput" type="password" maxlength="50" placeholder="รหัสผ่าน">
         <input id="registerConfirmPasswordInput" type="password" maxlength="50" placeholder="ยืนยันรหัสผ่าน">
@@ -45,7 +43,7 @@
         </div>
         <button id="registerButton" type="button">สมัครบัญชี</button>
       </div>
-      <small id="authStorageNote">โหมดออนไลน์: บัญชีและเซฟเกมจะเชื่อมกับ Supabase หลังตั้งค่าเสร็จ</small>
+      <small>บัญชีและข้อมูลเกมเก็บไว้ในเบราว์เซอร์เครื่องนี้</small>
     </div>
   </div>
 
@@ -340,14 +338,19 @@
   <!-- WORLD BOSS -->
   <section id="worldBossScreen" class="world-boss-screen hidden">
     <div class="world-boss-shell">
-      <button id="worldBossBackButton" class="zone-back-btn">← หน้าล็อบบี้</button>
+      <div class="world-boss-left-column">
+        <div class="world-boss-top-actions">
+          <button id="worldBossBackButton" class="zone-back-btn">← หน้าล็อบบี้</button>
+          <button id="worldBossRankButton" class="zone-back-btn world-boss-rank-button" type="button" onclick="return window.toggleWorldBossRank && window.toggleWorldBossRank()">🏆 ดูอันดับ</button>
+        </div>
+        <aside id="worldBossRankPanel" class="world-boss-rank-panel hidden"><div class="world-boss-rank-head"><b>🏆 รายชื่อผู้เข้าร่วม</b><small>คะแนนจากการตีบอสโลก</small></div><div id="worldBossPlayerList" class="world-boss-player-list"></div></aside>
+      </div>
       <div class="world-boss-main">
         <div class="world-boss-title"><span class="lobby-kicker">WORLD BOSS</span><h1>🌍 บอสโลก</h1><p>รวมพลังผู้เล่นเพื่อพิชิตบอสโลก</p></div>
         <div class="world-boss-stage"><div class="world-boss-stage-glow"></div><div class="world-boss-boss">👹</div><h2>บอสโลก</h2></div>
         <button id="worldBossFightButton" class="world-boss-fight-btn" type="button">⚔️ สู้บอสโลก</button>
         <div id="worldBossEntryStatus" class="world-boss-entry-status" aria-live="polite">🎟️ สิทธิ์เข้าบอสโลก: 1/1</div>
       </div>
-      <aside class="world-boss-rank-panel"><div class="world-boss-rank-head"><b>🏆 รายชื่อผู้เข้าร่วม</b><small>คะแนนจากการตีบอสโลก</small></div><div id="worldBossPlayerList" class="world-boss-player-list"></div></aside>
     </div>
   </section>
 
@@ -1084,7 +1087,4 @@
     </div>
   </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-config.js"></script>
-<script src="supabase-client.js"></script>
 <script src="script.js"></script>
