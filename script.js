@@ -1634,6 +1634,37 @@ const backToFarmButton = document.getElementById("backToFarmButton");
 const rpgCanvas = document.getElementById("rpgCanvas");
 const rpgCtx = rpgCanvas?.getContext("2d");
 
+/* V205 MOBILE SAFE PATCH — fixes only mobile dungeon rendering/entry.
+   Some mobile WebViews can fail on CanvasRenderingContext2D.roundRect(), which stops the
+   dungeon frame renderer and leaves a black canvas. Provide the same path API when missing. */
+if (rpgCtx && typeof rpgCtx.roundRect !== "function") {
+  rpgCtx.roundRect = function(x,y,w,h,r){
+    const rr = Math.max(0, Math.min(Number(r)||0, Math.abs(w)/2, Math.abs(h)/2));
+    this.moveTo(x+rr,y);
+    this.lineTo(x+w-rr,y);
+    this.quadraticCurveTo(x+w,y,x+w,y+rr);
+    this.lineTo(x+w,y+h-rr);
+    this.quadraticCurveTo(x+w,y+h,x+w-rr,y+h);
+    this.lineTo(x+rr,y+h);
+    this.quadraticCurveTo(x,y+h,x,y+h-rr);
+    this.lineTo(x,y+rr);
+    this.quadraticCurveTo(x,y,x+rr,y);
+    this.closePath();
+    return this;
+  };
+}
+
+function prepareMobileDungeonCanvas(){
+  if(!rpgCanvas) return;
+  // Restore the fixed internal game resolution and force a visible CSS box on phones.
+  if(!rpgCanvas.width) rpgCanvas.width=960;
+  if(!rpgCanvas.height) rpgCanvas.height=560;
+  rpgCanvas.style.display="block";
+  rpgCanvas.style.width="100%";
+  rpgCanvas.style.height="auto";
+  rpgCanvas.style.minHeight="320px";
+}
+
 const rpgJunkTypes = [
   { id:"slime", name:"เมือกสัตว์ประหลาด", icon:"🟢", price:4 },
   { id:"fang", name:"เขี้ยวเก่า", icon:"🦷", price:7 },
@@ -1861,7 +1892,10 @@ function requestRpgPlatform(){
   const saved=localStorage.getItem("farmGamePlatform");
   if(saved==="pc" || saved==="mobile"){
     rpg.platform=saved;
-    enterRpgJungle();
+    if(saved==="mobile") prepareMobileDungeonCanvas();
+    // Let the phone browser apply the visible layout before the first canvas frame.
+    if(saved==="mobile") requestAnimationFrame(()=>enterRpgJungle());
+    else enterRpgJungle();
     return;
   }
   document.getElementById("rpgPlatformModal")?.classList.remove("hidden");
@@ -1871,8 +1905,17 @@ function setRpgPlatform(platform){
   rpg.platform=platform;
   localStorage.setItem("farmGamePlatform",platform);
   document.getElementById("rpgPlatformModal")?.classList.add("hidden");
-  enterRpgJungle();
-  updateDungeonPlatformUI();
+  if(platform==="mobile"){
+    prepareMobileDungeonCanvas();
+    // Defer one frame so mobile Chrome/WebView finishes hiding the modal first.
+    requestAnimationFrame(()=>{
+      enterRpgJungle();
+      updateDungeonPlatformUI();
+    });
+  }else{
+    enterRpgJungle();
+    updateDungeonPlatformUI();
+  }
 }
 function updateDungeonPlatformUI(){
   const isMobile=rpg.platform==="mobile";
