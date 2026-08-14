@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Farm Game Admin</title>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <div class="admin-layout">
+
+    <!-- เมนูด้านซ้าย -->
+    <aside class="sidebar">
+
+      <div class="admin-logo">
+        🛠 FARM GAME
+        <span>ADMIN PANEL</span>
+      </div>
+
+      <div class="admin-info">
+        <div>เข้าสู่ระบบเป็น</div>
+        <strong id="adminName">กำลังโหลด...</strong>
+      </div>
+
+      <nav class="admin-menu">
+
+        <button class="menu-btn active" data-page="home">
+          🏠 หน้าหลัก
+        </button>
+
+        <button class="menu-btn" data-page="players">
+          👥 จัดการผู้เล่น
+        </button>
+
+        <button class="menu-btn" data-page="ban">
+          🚫 แบน / ปลดแบนผู้เล่น
+        </button>
+
+        <button class="menu-btn" data-page="rewards">
+          🎁 แจกของผู้เล่น / ทั้งเซิร์ฟเวอร์
+        </button>
+
+        <button class="menu-btn" data-page="dungeon">
+          🏰 จัดการดันเจี้ยน
+        </button>
+
+        <button class="menu-btn" data-page="pvp">
+          ⚔️ จัดการ PvP
+        </button>
+
+        <button class="menu-btn" data-page="gacha">
+          🎰 จัดการกาชา
+        </button>
+
+        <button class="menu-btn" data-page="shop">
+          🛒 จัดการไอเทมวางขายในร้านค้า
+        </button>
+
+        <button class="menu-btn" data-page="market">
+          🤝 จัดการตลาดผู้เล่น
+        </button>
+
+        <button class="menu-btn" data-page="items">
+          🎒 จัดการไอเทม
+        </button>
+
+        <button class="menu-btn" data-page="junk">
+          💰 จัดการราคาขยะ / ราคาขาย
+        </button>
+
+        <button class="menu-btn" data-page="drop">
+          📊 จัดการอัตราการดรอป
+        </button>
+
+        <button class="menu-btn" data-page="loginRewards">
+          📅 รางวัลล็อกอิน 7 วัน / 30 วัน
+        </button>
+
+        <button class="menu-btn" data-page="announcement">
+          📢 จัดการประกาศ
+        </button>
+
+        <button class="menu-btn" data-page="worldboss">
+          👹 จัดการบอสโลก
+        </button>
+
+        <button class="menu-btn" data-page="tower">
+          🗼 จัดการหอคอย
+        </button>
+
+        <button class="menu-btn" data-page="settings">
+          ⚙️ ตั้งค่าระบบเกม
+        </button>
+
+      </nav>
+
+      <button id="logoutBtn" class="logout-btn">
+        🚪 ออกจากระบบ
+      </button>
+
+    </aside>
+
+
+    <!-- เนื้อหาด้านขวา -->
+    <main class="main-content">
+
+      <header class="topbar">
+        <h1 id="pageTitle">🏠 หน้าหลักแอดมิน</h1>
+        <span id="welcomeText"></span>
+      </header>
+
+
+      <section id="pageContent" class="page-content">
+
+        <div class="dashboard-card">
+          <h2>ยินดีต้อนรับเข้าสู่ระบบแอดมิน</h2>
+          <p>
+            เลือกเมนูด้านซ้ายเพื่อจัดการระบบต่าง ๆ ของ Farm Game
+          </p>
+        </div>
+
+      </section>
+
+    </main>
+
+  </div>
+
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../supabase-config.js"></script>
+  <script src="../supabase-client.js"></script>
+  <script src="admin-dashboard.js"></script>
+
+  <script>
+
+    /* =========================
+       ตรวจสอบการล็อกอินแอดมิน
+    ========================= */
+
+    const isAdmin = sessionStorage.getItem("farmGameAdmin");
+    const adminUsername = sessionStorage.getItem("farmGameAdminUsername");
+
+    if (isAdmin !== "true") {
+      window.location.href = "index.html";
+    }
+
+
+    /* =========================
+       แสดงชื่อแอดมิน
+    ========================= */
+
+    document.getElementById("adminName").textContent =
+      adminUsername || "Admin";
+
+    document.getElementById("welcomeText").textContent =
+      "แอดมิน: " + (adminUsername || "Admin");
+
+
+    /* =========================
+       ออกจากระบบ
+    ========================= */
+
+    document.getElementById("logoutBtn").addEventListener("click", () => {
+
+      sessionStorage.removeItem("farmGameAdmin");
+      sessionStorage.removeItem("farmGameAdminUsername");
+
+      window.location.href = "index.html";
+
+    });
+
+
+    /* =========================
+       ระบบเมนู
+    ========================= */
+
+    const menuButtons = document.querySelectorAll(".menu-btn");
+    const pageTitle = document.getElementById("pageTitle");
+    const pageContent = document.getElementById("pageContent");
+
+
+    menuButtons.forEach((button) => {
+
+      button.addEventListener("click", () => {
+
+        /* เอาสถานะ active ออกจากทุกปุ่ม */
+        menuButtons.forEach((btn) => {
+          btn.classList.remove("active");
+        });
+
+
+        /* ใส่ active ให้ปุ่มที่กด */
+        button.classList.add("active");
+
+
+        /* ชื่อเมนู */
+        const pageName = button.textContent.trim();
+
+
+        /* เปลี่ยนหัวข้อด้านบน */
+        pageTitle.textContent = pageName;
+
+
+        /* ให้ระบบหน้าแอดมินจริงจัดการเมนูที่รองรับ */
+        if (window.renderAdminPage && window.renderAdminPage(page)) {
+          return;
+        }
+
+        pageContent.innerHTML = `
+          <div class="dashboard-card">
+            <h2>${pageName}</h2>
+            <p>เมนูนี้ยังไม่ได้เชื่อมระบบจริงในขั้นนี้</p>
+          </div>
+        `;
+
+      });
+
+    });
+
+  </script>
+
+</body>
+</html>
