@@ -12081,3 +12081,114 @@ var v164OpenMailbox = window.v164OpenMailbox;
     window.__farmV225.mailboxAliasesReady,
     'Supabase:', window.__farmV225.supabaseReady);
 })();
+
+
+
+/* =========================================================
+   V226 — GUARANTEED ACCOUNT -> STATE ORDER
+   Fixes FK 23503 when a local/legacy account has no row in
+   game_player_accounts yet. Before any player_state write,
+   ensure the parent account exists in Supabase.
+   ========================================================= */
+(()=>{
+  const A='game_player_accounts', S='game_player_states';
+  const c=()=>window.supabaseClient||null;
+  const cp=v=>{try{return JSON.parse(JSON.stringify(v));}catch(_){return v;}};
+  const nameOf=()=>String(state?.username||'').trim();
+
+  async function ensureAccount(username){
+    const db=c();
+    if(!db||!username) throw new Error('Supabase/username missing');
+
+    const {data:row,error:getErr}=await db
+      .from(A).select('username,password,gender')
+      .eq('username',username).maybeSingle();
+    if(getErr) throw getErr;
+    if(row) return row;
+
+    let local=null;
+    try{ local=loadAccounts()?.[username]||null; }catch(_){}
+
+    if(!local?.password){
+      throw new Error('Parent account not found in game_player_accounts and no local password is available for migration');
+    }
+
+    const gender=local.gender||state?.gender||'male';
+    const {data:created,error:createErr}=await db
+      .from(A).upsert({
+        username,
+        password:String(local.password),
+        gender
+      },{onConflict:'username'})
+      .select('username,password,gender')
+      .maybeSingle();
+
+    if(createErr) throw createErr;
+    if(!created){
+      const {data:verify,error:verifyErr}=await db
+        .from(A).select('username,password,gender')
+        .eq('username',username).maybeSingle();
+      if(verifyErr) throw verifyErr;
+      if(!verify) throw new Error('Could not create/verify parent account row');
+      return verify;
+    }
+    return created;
+  }
+
+  async function saveOnline(){
+    const db=c(), username=nameOf();
+    if(!db||!username) return false;
+
+    try{
+      const account=await ensureAccount(username);
+      const snapshot=cp(state);
+      snapshot.username=username;
+      snapshot.gender=account.gender||snapshot.gender||'male';
+
+      const {error}=await db.from(S).upsert({
+        username,
+        data:snapshot,
+        updated_at:new Date().toISOString()
+      },{onConflict:'username'});
+      if(error) throw error;
+
+      try{localStorage.setItem(accountStateKey(username),JSON.stringify(snapshot));}catch(_){}
+      console.log('[V226] account/state order OK:',username);
+      return true;
+    }catch(e){
+      console.error('[V226] online save failed:',e);
+      return false;
+    }
+  }
+
+  window.__farmOnlinePlayersV226={
+    version:'V226',
+    ensureAccount,
+    save:saveOnline
+  };
+
+  // Replace the V219 saver so every save first guarantees the FK parent.
+  const oldSave=window.__farmOnlinePlayers?.save;
+  if(typeof oldSave==='function'){
+    window.__farmOnlinePlayers.save=saveOnline;
+  }
+
+  // Patch the active save hook. It intentionally keeps the game's local save
+  // behavior, then queues an authoritative Supabase save.
+  if(typeof saveActiveAccountState==='function'){
+    const oldActive=saveActiveAccountState;
+    saveActiveAccountState=function(){
+      try{oldActive.apply(this,arguments);}catch(_){}
+      clearTimeout(window.__farmV226SaveTimer);
+      window.__farmV226SaveTimer=setTimeout(()=>saveOnline(),350);
+    };
+  }
+
+  // Also run once for an already logged-in legacy/local account.
+  setTimeout(()=>{
+    if(nameOf()) saveOnline();
+  },800);
+
+  console.log('[V226] FK-safe player sync ready');
+})();
+
