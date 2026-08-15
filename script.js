@@ -9386,6 +9386,19 @@ var v115SaveDirectory = window.v115SaveDirectory;
 var v115SnapshotCurrent = window.v115SnapshotCurrent;
 
 
+/* V225 — global aliases for V164 mailbox helpers
+   The original V164 code lives inside a closure. Later V209 code uses
+   bare identifiers, so expose them in the global script scope. */
+var v164LoadMail = window.v164LoadMail;
+var v164SaveMail = window.v164SaveMail;
+var v164CreateServerGift = window.v164CreateServerGift;
+var v164CurrentUserKey = window.v164CurrentUserKey;
+var v164UnclaimedGifts = window.v164UnclaimedGifts;
+var v164RefreshMailboxIndicator = window.v164RefreshMailboxIndicator;
+var v164RenderMailbox = window.v164RenderMailbox;
+var v164OpenMailbox = window.v164OpenMailbox;
+
+
 
 /* =========================
    V116 — Blood King-only Ascension Flow
@@ -12049,4 +12062,22 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
     'save=',typeof window.v164SaveMail==='function',
     'create=',typeof window.v164CreateServerGift==='function',
     'Supabase=',!!window.supabaseClient);
+})();
+
+
+/* V225 diagnostic */
+(()=>{
+  window.__farmV225={
+    version:'V225',
+    supabaseReady:!!window.supabaseClient,
+    mailboxAliasesReady:[
+      typeof v164LoadMail==='function',
+      typeof v164SaveMail==='function',
+      typeof v164CreateServerGift==='function',
+      typeof v164UnclaimedGifts==='function'
+    ].every(Boolean)
+  };
+  console.log('[V225] mailbox aliases ready:',
+    window.__farmV225.mailboxAliasesReady,
+    'Supabase:', window.__farmV225.supabaseReady);
 })();
