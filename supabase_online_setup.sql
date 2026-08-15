@@ -172,3 +172,47 @@ begin
   begin alter publication supabase_realtime add table public.game_admin_config;
   exception when duplicate_object then null; end;
 end $$;
+
+
+-- =========================================================
+-- V213 FINAL SERVER-AUTHORITATIVE ADMIN SYNC
+-- Run this whole SQL file in Supabase SQL Editor, then reload every browser.
+-- =========================================================
+
+create table if not exists public.game_admin_config (
+  id integer primary key check (id = 1),
+  config jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.game_admin_config enable row level security;
+
+drop policy if exists "v213 admin config select" on public.game_admin_config;
+drop policy if exists "v213 admin config insert" on public.game_admin_config;
+drop policy if exists "v213 admin config update" on public.game_admin_config;
+
+create policy "v213 admin config select"
+on public.game_admin_config for select to anon, authenticated
+using (true);
+
+create policy "v213 admin config insert"
+on public.game_admin_config for insert to anon, authenticated
+with check (true);
+
+create policy "v213 admin config update"
+on public.game_admin_config for update to anon, authenticated
+using (true) with check (true);
+
+insert into public.game_admin_config (id, config, updated_at)
+values (1, '{}'::jsonb, now())
+on conflict (id) do nothing;
+
+-- Keep Realtime enabled when the project supports it.
+do $$
+begin
+  begin
+    alter publication supabase_realtime add table public.game_admin_config;
+  exception
+    when duplicate_object then null;
+  end;
+end $$;

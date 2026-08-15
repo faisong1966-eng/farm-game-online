@@ -11959,3 +11959,139 @@ saveState();
   }
   boot();
 })();
+
+
+/* =========================================================
+   V213 — FINAL SERVER-AUTHORITATIVE ADMIN SYNC
+   Fixes V212 races:
+   1) one serialized server write path for the main Admin Save button;
+   2) every browser polls/reloads the server row even if Realtime fails;
+   3) remote config is applied to live monster/farm/shop/gacha data immediately;
+   4) localStorage is cache only and never treated as server success.
+   ========================================================= */
+(function installV213FinalServerAdminSync(){
+  const TABLE='game_admin_config', ID=1, POLL_MS=2000;
+  const client=()=>window.supabaseClient||null;
+  const clone=v=>{try{return JSON.parse(JSON.stringify(v));}catch(_){return v;}};
+  let saving=false, applying=false, booted=false, lastStamp='', channel=null;
+
+  function normalizeConfig(cfg){
+    adminConfig=adminMergeDefaults(clone(cfg||{}),adminClone(ADMIN_DEFAULT));
+    adminConfig.farm=adminConfig.farm||{};
+    adminConfig.farm.crops=adminConfig.farm.crops||{};
+    Object.entries(crops||{}).forEach(([id,crop])=>{
+      if(!adminConfig.farm.crops[id]){
+        adminConfig.farm.crops[id]={name:crop.name,icon:crop.icon,cost:crop.cost,sell:crop.sell,growMs:crop.growMs,enabled:true,currency:'coin'};
+      }
+    });
+    ensureAdminLoginRewards?.();
+  }
+
+  function applyEverywhere(){
+    try{syncLoginRewardConfigToGame?.();}catch(_){}
+    try{applyAdminConfig?.();}catch(e){console.error('[V213] applyAdminConfig failed',e);}
+    /* Existing monster packs may already be in memory. Rebuild their definitions so
+       the next zone/reset uses the server values instead of the old browser copy. */
+    try{resetRpgPacks?.();}catch(e){console.warn('[V213] monster refresh failed',e);}
+    try{renderSeedShop?.();renderFarm?.();renderAdminDrivenRpgShop?.();renderRpgBag?.();renderRpgInventory?.();renderEquipmentBag?.();syncCurrencyDisplays?.();}catch(_){}
+  }
+
+  async function pull(reason='poll', force=false){
+    const c=client();
+    if(!c || applying || saving) return false;
+    applying=true;
+    try{
+      const {data,error}=await c.from(TABLE).select('config,updated_at').eq('id',ID).maybeSingle();
+      if(error) throw error;
+      if(!data || !data.config || typeof data.config!=='object') return false;
+      const stamp=String(data.updated_at||'');
+      if(!force && stamp && stamp===lastStamp) return false;
+      normalizeConfig(data.config);
+      lastStamp=stamp;
+      applyEverywhere();
+      try{localStorage.setItem(ADMIN_KEY,JSON.stringify(adminConfig));}catch(_){}
+      try{renderAdmin?.();}catch(_){}
+      console.log('[V213] authoritative config applied:',reason,stamp);
+      return true;
+    }catch(e){
+      console.error('[V213] authoritative config pull failed:',e?.message||e);
+      return false;
+    }finally{applying=false;}
+  }
+
+  function normalizeBeforePush(){
+    Object.values(ITEM_DATABASE||{}).forEach(base=>{
+      const row=adminConfig.items?.[base.id];
+      if(!row) return;
+      row.price=Math.max(0,adminNum(row.price,adminNum(base.price,0)));
+      row.currency=row.currency==='diamond'?'diamond':'coin';
+      row.shop=!!row.shop;
+      if(Object.prototype.hasOwnProperty.call(row,'shop')) base.shop=!!row.shop;
+      if(Object.prototype.hasOwnProperty.call(row,'price')) base.price=row.price;
+      if(Object.prototype.hasOwnProperty.call(row,'currency')) base.currency=row.currency;
+    });
+    ensureAdminLoginRewards?.();
+  }
+
+  async function push(){
+    const c=client();
+    if(!c) throw new Error('Supabase client not connected');
+    normalizeBeforePush();
+    const payload={id:ID,config:clone(adminConfig),updated_at:new Date().toISOString()};
+    const {data,error}=await c.from(TABLE).upsert(payload,{onConflict:'id'}).select('updated_at').single();
+    if(error) throw error;
+    lastStamp=String(data?.updated_at||payload.updated_at);
+    applyEverywhere();
+    try{localStorage.setItem(ADMIN_KEY,JSON.stringify(adminConfig));}catch(_){}
+    return true;
+  }
+
+  async function saveServerAuthoritative(){
+    if(saving) return false;
+    saving=true;
+    const status=document.getElementById('adminStatus');
+    try{
+      if(status) status.textContent='⏳ กำลังบันทึกค่ากลางไปยังเซิร์ฟเวอร์...';
+      await push();
+      if(status) status.textContent='🌐 สำเร็จ: เซฟค่ากลางแล้ว ทุกเครื่องจะใช้ข้อมูลชุดเดียวกัน';
+      setTimeout(()=>{if(status&&status.textContent.includes('🌐'))status.textContent='พร้อมแก้ไข';},3500);
+      return true;
+    }catch(e){
+      console.error('[V213] ADMIN SERVER SAVE FAILED',e);
+      if(status) status.textContent='❌ เซฟขึ้นเซิร์ฟเวอร์ไม่สำเร็จ · ไม่มีการยืนยันการกระจายข้อมูล';
+      alert('บันทึกลงเซิร์ฟเวอร์ไม่สำเร็จ: '+(e?.message||e));
+      return false;
+    }finally{saving=false;}
+  }
+
+  /* Replace the public save function as well as the button path. */
+  saveAdminConfig=saveServerAuthoritative;
+  window.__farmAuthoritativeAdmin={
+    pull:()=>pull('manual',true),
+    push,
+    save:saveServerAuthoritative,
+    version:'V213'
+  };
+
+  document.addEventListener('click',function(e){
+    const btn=e.target?.closest?.('#adminSave');
+    if(!btn) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    saveServerAuthoritative();
+  },true);
+
+  async function boot(){
+    if(booted) return;
+    if(!client()){setTimeout(boot,250);return;}
+    booted=true;
+    await pull('initial',true);
+    try{
+      channel=client().channel('farm-v213-authoritative-admin')
+        .on('postgres_changes',{event:'*',schema:'public',table:TABLE,filter:'id=eq.1'},()=>pull('realtime',true))
+        .subscribe();
+    }catch(e){console.warn('[V213] realtime unavailable; polling remains active',e);}
+    setInterval(()=>pull('poll',false),POLL_MS);
+  }
+  boot();
+})();
