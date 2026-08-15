@@ -10714,8 +10714,7 @@ var v164OpenMailbox = window.v164OpenMailbox;
 
   // Replace mailbox opener/renderer behavior with the extended version.
   document.getElementById("openMailboxButton")?.addEventListener("click",()=>{document.getElementById("mailboxPanel")?.classList.remove("hidden");v1642RenderMailbox();});
-  /* V229: disabled legacy localStorage mailbox renderer.
-       It was overwriting the shared Supabase mailbox every 5 seconds. */
+  /* V230: legacy V164.2 mailbox renderer disabled */
   window.addEventListener("storage",e=>{if(e.key===V1642_MAIL_KEY){v1642Indicator();}});
   try{v1642Indicator();}catch(_){}
 })();
@@ -11603,208 +11602,13 @@ var v164OpenMailbox = window.v164OpenMailbox;
 })();
 
 /* =========================================================
-   V215 — AUTHORITATIVE SUPABASE MAILBOX (NO LOCAL FLICKER)
-   Fix: online clients must NEVER use another browser's localStorage as
-   mailbox truth. Until Supabase finishes loading, the badge stays hidden.
-   This removes the "red badge for 1 second then disappears" bug.
+   V230 — V215 legacy mailbox disabled
+   V227 is the authoritative shared Supabase mailbox.
    ========================================================= */
-(()=>{ return; /* V229: V215 disabled; V227 is authoritative */{
-  const MAIL_TABLE='game_server_mail';
-  const CLAIM_TABLE='game_server_mail_claims';
-  const POLL_MS=2000;
-  let serverMail=[];
-  let serverClaims=new Set();
-  let loading=false;
-  let loaded=false;
-  let lastUser='';
-  let channel=null;
-
-  const client=()=>window.supabaseClient||null;
-  const user=()=>String(state?.username||'').trim().toLowerCase();
-  const clone=v=>{try{return JSON.parse(JSON.stringify(v));}catch(_){return v;}};
-  const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const toGift=r=>({
-    id:String(r.id),
-    createdAt:Date.parse(r.created_at||'')||Date.now(),
-    expiresAt:r.expires_at?(Date.parse(r.expires_at)||0):0,
-    item:r.item||{},
-    qty:Math.max(1,Math.floor(Number(r.qty)||1)),
-    claims:{}
-  });
-  const toRow=g=>({
-    id:String(g.id),
-    created_at:new Date(Number(g.createdAt)||Date.now()).toISOString(),
-    expires_at:g.expiresAt?new Date(Number(g.expiresAt)).toISOString():null,
-    item:g.item||{},
-    qty:Math.max(1,Math.floor(Number(g.qty)||1))
-  });
-
-  async function refresh(force=false){
-    const c=client(), u=user();
-    if(!c||!u||loading)return false;
-    if(!force && loaded && u===lastUser){} // polling is intentionally still allowed
-    loading=true;
-    try{
-      const now=new Date().toISOString();
-      const {data,error}=await c.from(MAIL_TABLE).select('id,created_at,expires_at,item,qty')
-        .or(`expires_at.is.null,expires_at.gt.${now}`)
-        .order('created_at',{ascending:false});
-      if(error)throw error;
-      const rows=(data||[]).map(toGift);
-      const ids=rows.map(x=>x.id);
-      let claims=new Set();
-      if(ids.length){
-        const q=await c.from(CLAIM_TABLE).select('mail_id').eq('username',u).in('mail_id',ids);
-        if(q.error)throw q.error;
-        claims=new Set((q.data||[]).map(x=>String(x.mail_id)));
-      }
-      serverMail=rows;
-      serverClaims=claims;
-      loaded=true;
-      lastUser=u;
-      return true;
-    }catch(err){
-      // Critical: do NOT fall back to browser-local gifts when Supabase is configured.
-      // A failed/unfinished request must not create a false red badge.
-      console.error('[V215] authoritative mailbox refresh failed',err);
-      serverMail=[];
-      serverClaims=new Set();
-      loaded=false;
-      return false;
-    }finally{
-      loading=false;
-      try{v164RefreshMailboxIndicator?.();}catch(_){}
-      if(!document.getElementById('mailboxPanel')?.classList.contains('hidden')){
-        try{v215RenderNow();}catch(_){}
-      }
-    }
-  }
-
-  // Supabase is the only source when online. Offline local mode remains available
-  // only if the Supabase client itself does not exist.
-  v164UnclaimedGifts=function(){
-    const u=user();
-    if(!u)return [];
-    if(client()){
-      if(!loaded||u!==lastUser)return [];
-      const now=Date.now();
-      return serverMail.filter(g=>g&&g.id&&(!g.expiresAt||Number(g.expiresAt)>now)&&!serverClaims.has(String(g.id))).map(clone);
-    }
-    try{return v164LoadMail().filter(g=>g&&g.id&&(!g.expiresAt||Number(g.expiresAt)>Date.now())&&!g.claims?.[u]);}catch(_){return [];}
-  };
-
-  function v215RenderNow(){
-    const box=document.getElementById('mailboxList'); if(!box)return;
-    const gifts=v164UnclaimedGifts();
-    if(!gifts.length){
-      box.innerHTML=loaded||!client()
-        ? '<div class="mailbox-empty">📭 <b>ยังไม่มีของขวัญใหม่</b><small>เมื่อแอดมินส่งของให้ทั้งเซิร์ฟเวอร์ ของจะปรากฏที่นี่</small></div>'
-        : '<div class="mailbox-empty">⏳ <b>กำลังตรวจของขวัญจากเซิร์ฟเวอร์...</b></div>';
-      try{v164RefreshMailboxIndicator?.();}catch(_){}
-      return;
-    }
-    box.innerHTML=gifts.map(g=>{
-      const item=g.item||{};
-      const when=new Date(g.createdAt||Date.now()).toLocaleString();
-      const left=Math.max(0,Number(g.expiresAt||0)-Date.now());
-      const expiry=g.expiresAt?` · เหลือ ${esc(typeof v181DurationText==='function'?v181DurationText(left):Math.ceil(left/60000)+' นาที')}`:'';
-      return `<div class="mailbox-gift"><div class="mailbox-gift-icon">${esc(item.icon||'🎁')}</div><div class="mailbox-gift-info"><h3>${esc(item.name||'ของขวัญ')}</h3><p>${esc(item.description||'ของขวัญจากแอดมิน')}</p><small>จำนวน ${Math.max(1,Number(g.qty)||1).toLocaleString()} · ส่งเมื่อ ${esc(when)}${expiry}</small></div><button type="button" class="mailbox-claim" data-v215-claim="${esc(g.id)}">รับของ</button></div>`;
-    }).join('');
-    box.querySelectorAll('[data-v215-claim]').forEach(btn=>btn.addEventListener('click',async()=>{
-      const id=String(btn.dataset.v215Claim||''),u=user();
-      const gift=serverMail.find(x=>String(x.id)===id);
-      if(!id||!u||!gift||serverClaims.has(id))return;
-      btn.disabled=true;
-      const c=client();
-      if(c){
-        const {error}=await c.from(CLAIM_TABLE).insert({mail_id:id,username:u});
-        if(error && String(error.code)!=='23505'){
-          console.error('[V215] claim failed',error);
-          alert('รับของไม่สำเร็จ: เซิร์ฟเวอร์ยังไม่ได้บันทึกการรับของ กรุณาลองใหม่');
-          btn.disabled=false; return;
-        }
-        // If duplicate, another tab/device already claimed it: do not grant again.
-        if(error && String(error.code)==='23505'){await refresh(true);return;}
-        serverClaims.add(id);
-      }else{
-        return; // V215 online build does not grant from a local shadow copy.
-      }
-      const live={username:state?.username||'',state};
-      window.v115Grant(live,gift.item||{},gift.qty);
-      try{saveState();render();syncCurrencyDisplays();renderRpgInventory();renderRpgBag();}catch(_){}
-      await refresh(true);
-      v215RenderNow();
-    }));
-    try{v164RefreshMailboxIndicator?.();}catch(_){}
-  }
-
-  v164RenderMailbox=function(){
-    v215RenderNow();
-    refresh(true);
-  };
-
-  v164CreateServerGift=function(item,qty,durationMs){
-    const now=Date.now();
-    const gift={id:'server-gift-'+now+'-'+Math.random().toString(36).slice(2),createdAt:now,expiresAt:durationMs?now+Math.max(0,Number(durationMs)||0):0,item:clone(item),qty:Math.max(1,Math.floor(Number(qty)||1)),claims:{}};
-    const c=client();
-    if(!c){
-      alert('ส่งของทั้งเซิร์ฟเวอร์ไม่ได้: Supabase ยังไม่เชื่อมต่อ');
-      return gift;
-    }
-    // Return immediately for existing admin UI, but only mark success after DB insert.
-    c.from(MAIL_TABLE).insert(toRow(gift)).then(async({error})=>{
-      if(error){
-        console.error('[V215] server gift insert failed',error);
-        alert('❌ ส่งของขึ้นเซิร์ฟเวอร์ไม่สำเร็จ: '+(error.message||error));
-        return;
-      }
-      await refresh(true);
-      try{v164RefreshMailboxIndicator?.();}catch(_){}
-      console.log('[V215] server gift saved',gift.id);
-    });
-    return gift;
-  };
-
-  // Keep badge hidden while the authoritative query is still loading.
-  const oldRefresh=v164RefreshMailboxIndicator;
-  v164RefreshMailboxIndicator=function(){
-    if(client()&&!loaded){
-      const badge=document.getElementById('mailboxBadge'),btn=document.getElementById('openMailboxButton');
-      if(badge)badge.classList.add('hidden');
-      if(btn)btn.classList.remove('has-mail');
-      return;
-    }
-    return oldRefresh.apply(this,arguments);
-  };
-
-  const oldShowGame=showGame;
-  showGame=function(){
-    const out=oldShowGame.apply(this,arguments);
-    loaded=false; lastUser=''; serverMail=[]; serverClaims=new Set();
-    try{v164RefreshMailboxIndicator();}catch(_){}
-    setTimeout(()=>refresh(true),0);
-    return out;
-  };
-
-  setInterval(()=>{
-    const u=user();
-    if(u)refresh(false);
-    else {loaded=false;lastUser='';serverMail=[];serverClaims=new Set();try{v164RefreshMailboxIndicator();}catch(_){}}
-  },POLL_MS);
-
-  function boot(){
-    const c=client();
-    if(!c){setTimeout(boot,300);return;}
-    refresh(true);
-    try{
-      channel=c.channel('farm-v215-authoritative-mailbox')
-        .on('postgres_changes',{event:'INSERT',schema:'public',table:MAIL_TABLE},()=>refresh(true))
-        .on('postgres_changes',{event:'DELETE',schema:'public',table:MAIL_TABLE},()=>refresh(true))
-        .subscribe();
-    }catch(e){console.warn('[V215] realtime unavailable; 2s polling active',e);}
-  }
-  boot();
+(()=>{
+  console.log('[V230] legacy V215 mailbox disabled; V227 remains authoritative');
 })();
+
 
 
 
@@ -12532,18 +12336,5 @@ var v164OpenMailbox = window.v164OpenMailbox;
   console.log('[V228] mailbox visibility lock ready');
 })();
 
-
-/* =========================================================
-   V229 — SINGLE MAILBOX ENGINE
-   V227 is now the only active mailbox renderer/source of truth.
-   Legacy V215 and V164.2 periodic render paths are disabled.
-   ========================================================= */
-(()=>{
-  window.__farmV229Mailbox = {
-    version: 'V229',
-    engine: 'V227',
-    source: 'game_server_mail',
-    status: 'single-renderer'
-  };
-  console.log('[V229] single mailbox engine active — V227 only');
-})();
+/* V230 mailbox engine marker */
+(()=>{window.__farmV230Mailbox={version:'V230',engine:'V227'};console.log('[V230] mailbox patch loaded');})();
