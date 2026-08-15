@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="style.css">
 
 <style id="separate-admin-page-style">
-body.admin-page-mode > *:not(#adminPanel):not(#secondaryAdminPanel):not(#adminPageSwitcher):not(script):not(style){display:none!important}
+body.admin-page-mode > *:not(#adminPanel):not(#secondaryAdminPanel):not(script):not(style){display:none!important}
 body.admin-page-mode{background:#0b1020!important;overflow:auto!important}
 body.admin-page-mode .admin-overlay{position:fixed!important;inset:0!important;display:none!important;z-index:99999!important;background:#0b1020!important;padding:18px!important;overflow:auto!important}
 body.admin-page-mode .admin-overlay:not(.hidden){display:block!important}
@@ -1096,47 +1096,7 @@ body.admin-page-mode .admin-overlay:not(.hidden){display:block!important}
     </div>
   </div>
 
-
-<div id="adminPageSwitcher" aria-label="สลับหน้าแอดมิน">
-  <button type="button" id="adminPageMain">⚙️ แอดมินหลัก</button>
-  <button type="button" id="adminPageSecondary">🛡️ แอดมินรอง</button>
-  <button type="button" id="adminPageGame">🎮 กลับหน้าเกม</button>
-</div>
-
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-config.js"></script>
 <script src="supabase-client.js"></script>
 <script src="script.js"></script>
-
-<script>
-(function () {
-  function openMainAdmin() {
-    document.body.classList.add('admin-page-mode');
-    document.getElementById('secondaryAdminPanel')?.classList.add('hidden');
-    const panel = document.getElementById('adminPanel');
-    panel?.classList.remove('hidden');
-    try { window.renderAdmin?.(); } catch (e) { console.error('Admin render error:', e); }
-  }
-
-  function openSecondaryAdmin() {
-    document.body.classList.add('admin-page-mode');
-    document.getElementById('adminPanel')?.classList.add('hidden');
-    const panel = document.getElementById('secondaryAdminPanel');
-    panel?.classList.remove('hidden');
-    try { window.renderSecondaryAdmin?.(); } catch (e) { console.error('Secondary admin render error:', e); }
-  }
-
-  document.body.classList.add('admin-page-mode');
-
-  document.getElementById('adminPageMain')?.addEventListener('click', openMainAdmin);
-  document.getElementById('adminPageSecondary')?.addEventListener('click', openSecondaryAdmin);
-  document.getElementById('adminPageGame')?.addEventListener('click', function () {
-    window.location.href = './';
-  });
-
-  openMainAdmin();
-})();
-</script>
-</body>
-</html>
-
