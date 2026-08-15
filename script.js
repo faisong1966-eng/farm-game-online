@@ -12457,3 +12457,76 @@ var v164OpenMailbox = window.v164OpenMailbox;
   console.log('[V227] shared server mail ready');
 })();
 
+
+
+/* =========================================================
+   V228 — MAILBOX VISIBILITY LOCK
+   Prevents legacy mailbox code from hiding the currently
+   opened mailbox panel.
+   ========================================================= */
+(()=>{
+  let userOpened=false;
+  let lastPanel=null;
+
+  function panel(){ return document.getElementById('mailboxPanel'); }
+
+  function forceOpen(){
+    const p=panel();
+    if(!p)return;
+    p.classList.remove('hidden');
+    lastPanel=p;
+  }
+
+  function forceClose(){
+    userOpened=false;
+    const p=panel();
+    if(p)p.classList.add('hidden');
+  }
+
+  document.addEventListener('click',e=>{
+    const openBtn=e.target?.closest?.('#openMailboxButton');
+    if(openBtn){
+      userOpened=true;
+      setTimeout(forceOpen,0);
+      return;
+    }
+    const closeBtn=e.target?.closest?.('#mailboxClose');
+    if(closeBtn){
+      forceClose();
+      return;
+    }
+  },true);
+
+  const observer=new MutationObserver(()=>{
+    const p=panel();
+    if(p!==lastPanel){
+      lastPanel=p;
+      if(userOpened)setTimeout(forceOpen,0);
+    }
+    if(userOpened && p && p.classList.contains('hidden')){
+      p.classList.remove('hidden');
+    }
+  });
+
+  try{
+    observer.observe(document.body,{
+      subtree:true,
+      childList:true,
+      attributes:true,
+      attributeFilter:['class']
+    });
+  }catch(_){}
+
+  setInterval(()=>{
+    if(userOpened)forceOpen();
+  },100);
+
+  window.__farmV228Mailbox={
+    version:'V228',
+    open:()=>{userOpened=true;forceOpen();},
+    close:forceClose,
+    isOpen:()=>userOpened
+  };
+
+  console.log('[V228] mailbox visibility lock ready');
+})();

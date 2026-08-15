@@ -324,3 +324,6 @@ VERSION: V219 TRUE ONLINE PLAYER STATE SYNC
 - Admin global gifts continue to use game_server_mail and game_server_mail_claims.
 - Shared admin settings continue to use the single game_admin_config row.
 - Included V219_SUPABASE_SETUP.sql must be run once in Supabase SQL Editor.
+
+
+V228: mailbox visibility lock added to prevent legacy mailbox code from hiding the open mailbox panel.
