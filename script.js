@@ -10463,11 +10463,9 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
     if(rpg.running) requestAnimationFrame(rpgLoop);
   };
 
-  // Reset HUD throttle when entering combat so the first frame is immediate.
-  const __oldStartRpg=startRpg;
-  if(typeof __oldStartRpg==="function"){
-    startRpg=function(...args){ __lastHudSync=0; return __oldStartRpg.apply(this,args); };
-  }
+  // V223: the legacy file has no startRpg function.
+  // Do not reference an undeclared symbol; HUD throttle is reset by the
+  // existing combat-entry flow instead.
 })();
 
 
@@ -12007,4 +12005,19 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
 (()=>{
   window.__farmV221={version:'V221',v115GrantReady:typeof window.v115Grant==='function',supabaseReady:!!window.supabaseClient};
   console.log('[V221] V115 grant bridge ready:', typeof window.v115Grant==='function', 'Supabase:', !!window.supabaseClient);
+})();
+
+
+/* V223 diagnostic */
+(()=>{
+  window.__farmV223={
+    version:'V223',
+    supabaseReady:!!window.supabaseClient,
+    v115GrantReady:typeof window.v115Grant==='function',
+    v115CatalogReady:typeof window.v115Catalog==='function',
+    startRpgReferenceRemoved:true
+  };
+  console.log('[V223] startup OK — Supabase:', !!window.supabaseClient,
+              'v115Grant:', typeof window.v115Grant==='function',
+              'v115Catalog:', typeof window.v115Catalog==='function');
 })();
