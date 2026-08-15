@@ -147,3 +147,28 @@ create policy "v210 accounts update" on public.game_player_accounts for update u
 create policy "v210 states select" on public.game_player_states for select using (true);
 create policy "v210 states insert" on public.game_player_states for insert with check (true);
 create policy "v210 states update" on public.game_player_states for update using (true) with check (true);
+
+-- V212 AUTHORITATIVE SERVER-WIDE ADMIN FIX
+-- Ensure one real shared row exists. All browsers read this row.
+insert into public.game_admin_config (id, config, updated_at)
+values (1, '{}'::jsonb, now())
+on conflict (id) do nothing;
+
+-- Recreate permissive browser policies for the current username-based game.
+-- These are functional policies for the existing architecture; move admin writes
+-- behind authenticated server functions before exposing the game publicly.
+drop policy if exists "v212 admin config select" on public.game_admin_config;
+drop policy if exists "v212 admin config insert" on public.game_admin_config;
+drop policy if exists "v212 admin config update" on public.game_admin_config;
+create policy "v212 admin config select" on public.game_admin_config
+for select to anon, authenticated using (true);
+create policy "v212 admin config insert" on public.game_admin_config
+for insert to anon, authenticated with check (true);
+create policy "v212 admin config update" on public.game_admin_config
+for update to anon, authenticated using (true) with check (true);
+
+do $$
+begin
+  begin alter publication supabase_realtime add table public.game_admin_config;
+  exception when duplicate_object then null; end;
+end $$;
