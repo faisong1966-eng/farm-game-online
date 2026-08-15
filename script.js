@@ -10589,7 +10589,7 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
       const id=b.dataset.v1642Claim,key=v1642User(),list=v1642Load(),g=list.find(x=>x.id===id);
       if(!g||!v1642ActiveForUser(g,key)||g.type!=="gift"){v1642RenderMailbox();return;}
       const live={username:state?.username||"",state};
-      v115Grant(live,g.item||{},g.qty);
+      window.v115Grant(live,g.item||{},g.qty);
       g.claims=g.claims||{};g.claims[key]=v1642Now();v1642Save(list);
       try{saveState();render();syncCurrencyDisplays();renderRpgInventory();renderRpgBag();}catch(_){}
       v1642RenderMailbox();
@@ -10613,10 +10613,10 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
 
   // Override the current Players/Gift admin renderer only.
   renderAdminPlayers = function(box){
-    const dir=v115LoadDirectory(), list=Object.values(dir).sort((a,b)=>String(a.username).localeCompare(String(b.username),"th"));
+    const dir=window.v115LoadDirectory(), list=Object.values(dir).sort((a,b)=>String(a.username).localeCompare(String(b.username),"th"));
     if(!v115SelectedPlayer&&list[0])v115SelectedPlayer=list[0].username.toLowerCase();
     const selected=list.find(p=>p.username.toLowerCase()===v115SelectedPlayer)||null;
-    const catalog=v115Catalog();
+    const catalog=window.v115Catalog();
     if(!v115SelectedItem&&catalog[0])v115SelectedItem=catalog[0].id;
     const filter=String(window.__v115PlayerFilter||"").toLowerCase();
     const visible=list.filter(p=>p.username.toLowerCase().includes(filter));
@@ -10653,7 +10653,7 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
     box.querySelectorAll("[data-v1642-player]").forEach(b=>b.onclick=()=>{v115SelectedPlayer=b.dataset.v1642Player;renderAdminPlayers(box);});
     box.querySelector("#v1642ItemSelect")?.addEventListener("change",e=>v115SelectedItem=e.target.value);
     const giftData=()=>{
-      const item=v115Catalog().find(x=>x.id===v115SelectedItem);
+      const item=window.v115Catalog().find(x=>x.id===v115SelectedItem);
       return {item,qty:Math.max(1,Math.floor(Number(box.querySelector("#v1642GrantQty")?.value)||1)),duration:Math.max(0,Math.floor(Number(box.querySelector("#v1642Duration")?.value)||0)),title:box.querySelector("#v1642GiftTitle")?.value||"",message:box.querySelector("#v1642GiftMessage")?.value||""};
     };
     const sendGift=(target)=>{
@@ -11484,7 +11484,7 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
       id:'server-gift-'+now+'-'+Math.random().toString(36).slice(2),
       createdAt:now,
       expiresAt:now+Math.max(0,Number(durationMs)||0),
-      item:v115Clone(item),
+      item:window.v115Clone(item),
       qty:Math.max(1,Math.floor(Number(qty)||1)),
       claims:{}
     };
@@ -11493,7 +11493,7 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
       try{return v209OldCreateGift.apply(this,arguments);}catch(_){const list=v209LocalLoadMail();list.unshift(gift);v209LocalSaveMail(list);return gift;}
     }
     // Show immediately to the sender, then publish to Supabase for every player/browser.
-    onlineMailCache.unshift(v115Clone(gift));
+    onlineMailCache.unshift(window.v115Clone(gift));
     lastMailSync=Date.now();
     client.from(MAIL_TABLE).insert(mailToRow(gift)).then(({error})=>{
       if(error){
@@ -11544,7 +11544,7 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
         const list=v209LocalLoadMail(),localGift=list.find(x=>String(x.id)===id);if(!localGift){v164RenderMailbox();return;}localGift.claims=localGift.claims||{};localGift.claims[user]=Date.now();v209LocalSaveMail(list);
       }
       const live={username:state?.username||'',state};
-      v115Grant(live,gift.item||{},gift.qty);
+      window.v115Grant(live,gift.item||{},gift.qty);
       try{saveState();render();syncCurrencyDisplays();renderRpgInventory();renderRpgBag();}catch(_){}
       v164RenderMailbox();
     }));
@@ -11709,7 +11709,7 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
         return; // V215 online build does not grant from a local shadow copy.
       }
       const live={username:state?.username||'',state};
-      v115Grant(live,gift.item||{},gift.qty);
+      window.v115Grant(live,gift.item||{},gift.qty);
       try{saveState();render();syncCurrencyDisplays();renderRpgInventory();renderRpgBag();}catch(_){}
       await refresh(true);
       v215RenderNow();
