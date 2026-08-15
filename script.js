@@ -12192,3 +12192,268 @@ var v164OpenMailbox = window.v164OpenMailbox;
   console.log('[V226] FK-safe player sync ready');
 })();
 
+
+
+
+/* =========================================================
+   V227 — REAL SHARED SERVER MAIL + STABLE MAILBOX UI
+   Fixes a scope bug where V209 replaced only its own local
+   v164CreateServerGift/v164RenderMailbox variables. The
+   original Admin and mailbox handlers still used V181's
+   localStorage-only functions.
+   ========================================================= */
+(()=>{
+  const MAIL='game_server_mail';
+  const CLAIMS='game_server_mail_claims';
+  const clone=v=>{try{return JSON.parse(JSON.stringify(v));}catch(_){return v;}};
+  const db=()=>window.supabaseClient||null;
+  const user=()=>String(state?.username||'').trim().toLowerCase();
+
+  let cache=[];
+  let claimed=new Set();
+  let syncing=false;
+  let lastSync=0;
+  let renderTimer=0;
+  let lastHtml='';
+
+  function rowToGift(r){
+    return {
+      id:String(r.id),
+      createdAt:Date.parse(r.created_at||'')||Date.now(),
+      expiresAt:r.expires_at?(Date.parse(r.expires_at)||0):0,
+      item:r.item||{},
+      qty:Math.max(1,Math.floor(Number(r.qty)||1))
+    };
+  }
+
+  function active(g){
+    return g && g.id && (!g.expiresAt || Number(g.expiresAt)>Date.now());
+  }
+
+  async function sync(force=false){
+    const c=db(), u=user();
+    if(!c||!u||syncing)return false;
+    if(!force && Date.now()-lastSync<1500)return true;
+    syncing=true;
+    try{
+      const now=new Date().toISOString();
+      const {data:rows,error:e1}=await c.from(MAIL)
+        .select('id,created_at,expires_at,item,qty')
+        .or(`expires_at.is.null,expires_at.gt.${now}`)
+        .order('created_at',{ascending:false});
+      if(e1)throw e1;
+      cache=(rows||[]).map(rowToGift);
+      claimed=new Set();
+      const ids=cache.map(g=>g.id);
+      if(ids.length){
+        const {data:cr,error:e2}=await c.from(CLAIMS)
+          .select('mail_id')
+          .eq('username',u)
+          .in('mail_id',ids);
+        if(e2)throw e2;
+        (cr||[]).forEach(x=>claimed.add(String(x.mail_id)));
+      }
+      lastSync=Date.now();
+      return true;
+    }catch(e){
+      console.error('[V227] mail sync failed',e);
+      return false;
+    }finally{syncing=false;}
+  }
+
+  async function create(item,qty,durationMs){
+    const c=db();
+    if(!c)throw new Error('Supabase client not ready');
+    const now=Date.now();
+    const ms=Math.max(0,Number(durationMs)||0);
+    const gift={
+      id:'server-gift-'+now+'-'+Math.random().toString(36).slice(2),
+      createdAt:now,
+      expiresAt:ms?now+ms:0,
+      item:clone(item)||{},
+      qty:Math.max(1,Math.floor(Number(qty)||1))
+    };
+    const row={
+      id:gift.id,
+      created_at:new Date(gift.createdAt).toISOString(),
+      expires_at:gift.expiresAt?new Date(gift.expiresAt).toISOString():null,
+      item:gift.item,
+      qty:gift.qty
+    };
+    const {error}=await c.from(MAIL).insert(row);
+    if(error)throw error;
+    cache.unshift(gift);
+    lastSync=Date.now();
+    console.log('[V227] server gift published:',gift.id);
+    return gift;
+  }
+
+  function unclaimed(){
+    const u=user();
+    if(!u)return [];
+    return cache.filter(active).filter(g=>!claimed.has(g.id));
+  }
+
+  function refreshBadge(){
+    const n=unclaimed().length;
+    const badge=document.getElementById('mailboxBadge');
+    const btn=document.getElementById('openMailboxButton');
+    if(badge)badge.classList.toggle('hidden',n===0);
+    if(btn)btn.classList.toggle('has-mail',n>0);
+  }
+
+  function render(){
+    const box=document.getElementById('mailboxList');
+    if(!box)return;
+    const gifts=unclaimed();
+    let html='';
+    if(!gifts.length){
+      html='<div class="mailbox-empty">📭 <b>ยังไม่มีของขวัญใหม่</b><small>เมื่อแอดมินส่งของให้ทั้งเซิร์ฟเวอร์ ของจะปรากฏที่นี่</small></div>';
+    }else{
+      html=gifts.map(g=>{
+        const item=g.item||{},when=new Date(g.createdAt||Date.now()).toLocaleString();
+        const left=Math.max(0,Number(g.expiresAt||0)-Date.now());
+        let expiry='';
+        if(g.expiresAt){
+          const mins=Math.ceil(left/60000);
+          expiry=' · เหลือ '+Math.max(0,mins)+' นาที';
+        }
+        return `<div class="mailbox-gift"><div class="mailbox-gift-icon">${adminEsc(item.icon||'🎁')}</div><div class="mailbox-gift-info"><h3>${adminEsc(item.name||'ของขวัญ')}</h3><p>${adminEsc(item.description||'ของขวัญจากแอดมิน')}</p><small>จำนวน ${Math.max(1,Number(g.qty)||1).toLocaleString()} · ส่งเมื่อ ${adminEsc(when)}${expiry}</small></div><button type="button" class="mailbox-claim" data-v227-claim="${adminEsc(g.id)}">รับของ</button></div>`;
+      }).join('');
+    }
+    if(html!==lastHtml || box.innerHTML!==html){
+      box.innerHTML=html;
+      lastHtml=html;
+      box.querySelectorAll('[data-v227-claim]').forEach(b=>{
+        b.addEventListener('click',()=>claim(b.dataset.v227Claim));
+      });
+    }
+    refreshBadge();
+  }
+
+  async function claim(id){
+    const c=db(),u=user();
+    if(!c||!u||!id)return;
+    const gift=cache.find(g=>g.id===String(id));
+    if(!gift||!active(g)||claimed.has(gift.id)){render();return;}
+    const btn=document.querySelector(`[data-v227-claim="${CSS.escape(gift.id)}"]`);
+    if(btn)btn.disabled=true;
+    try{
+      const {error}=await c.from(CLAIMS).insert({mail_id:gift.id,username:u});
+      if(error && String(error.code)!=='23505')throw error;
+      claimed.add(gift.id);
+      const live={username:state?.username||'',state};
+      if(typeof window.v115Grant!=='function')throw new Error('v115Grant unavailable');
+      window.v115Grant(live,gift.item||{},gift.qty);
+      try{
+        saveState();render();syncCurrencyDisplays();renderRpgInventory();renderRpgBag();
+      }catch(_){}
+      render();
+      console.log('[V227] gift claimed:',gift.id,'by',u);
+    }catch(e){
+      console.error('[V227] claim failed',e);
+      alert('รับของออนไลน์ไม่สำเร็จ: '+(e.message||e));
+      if(btn)btn.disabled=false;
+    }
+  }
+
+  async function open(){
+    const panel=document.getElementById('mailboxPanel');
+    if(panel)panel.classList.remove('hidden');
+    lastHtml='';
+    await sync(true);
+    render();
+  }
+
+  function close(){
+    document.getElementById('mailboxPanel')?.classList.add('hidden');
+  }
+
+  function replaceButton(id,fn){
+    const old=document.getElementById(id);
+    if(!old)return false;
+    const fresh=old.cloneNode(true);
+    old.replaceWith(fresh);
+    fresh.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();fn();});
+    return true;
+  }
+
+  // Main Admin "server grant" button. Clone removes the old localStorage handler.
+  const adminBtn= document.getElementById('v115GrantServerButton');
+  if(adminBtn){
+    const fresh=adminBtn.cloneNode(true);
+    adminBtn.replaceWith(fresh);
+    fresh.addEventListener('click',async e=>{
+      e.preventDefault();e.stopImmediatePropagation();
+      const box=fresh.closest('#adminContent')||document;
+      const sel=box.querySelector('#v115ItemSelect');
+      const qtyEl=box.querySelector('#v115GrantQty');
+      const status=box.querySelector('#v115GrantStatus');
+      const catalog=typeof window.v115Catalog==='function'?window.v115Catalog():[];
+      const item=catalog.find(x=>x.id===sel?.value);
+      const qty=Math.max(1,Math.floor(Number(qtyEl?.value)||1));
+      if(!item)return;
+      fresh.disabled=true;
+      try{
+        await create(item,qty,0);
+        if(status)status.textContent=`✅ ส่ง ${item.name} x${qty.toLocaleString()} ให้ทั้งเซิร์ฟเวอร์แล้ว · ผู้เล่นแต่ละ ID รับได้ 1 ครั้ง`;
+        refreshBadge();
+      }catch(err){
+        console.error('[V227] admin server grant failed',err);
+        if(status)status.textContent='❌ ส่งของไม่สำเร็จ';
+        alert('ส่งของออนไลน์ไม่สำเร็จ: '+(err.message||err));
+      }finally{fresh.disabled=false;}
+    });
+  }
+
+  // Secondary Admin server-gift button (with expiry).
+  const secBtn=document.getElementById('v181GiftSend');
+  if(secBtn){
+    const fresh=secBtn.cloneNode(true);
+    secBtn.replaceWith(fresh);
+    fresh.addEventListener('click',async e=>{
+      e.preventDefault();e.stopImmediatePropagation();
+      const box=fresh.closest('#secondaryAdminContent')||document;
+      const catalog=typeof window.v115Catalog==='function'?window.v115Catalog():[];
+      const item=catalog.find(x=>x.id===box.querySelector('#v181GiftItem')?.value);
+      const qty=Math.max(1,Math.floor(Number(box.querySelector('#v181GiftQty')?.value)||1));
+      const days=Number(box.querySelector('#v181GiftDays')?.value)||0;
+      const hours=Number(box.querySelector('#v181GiftHours')?.value)||0;
+      const mins=Number(box.querySelector('#v181GiftMinutes')?.value)||0;
+      const ms=Math.max(0,days*86400000+hours*3600000+mins*60000);
+      const st=box.querySelector('#v181GiftStatus');
+      if(!item||ms<=0)return;
+      fresh.disabled=true;
+      try{
+        await create(item,qty,ms);
+        if(st)st.textContent=`✅ ส่ง ${item.name} x${qty.toLocaleString()} ให้ทั้งเซิร์ฟเวอร์แล้ว · รับได้คนละ 1 ครั้ง`;
+      }catch(err){
+        console.error('[V227] secondary server grant failed',err);
+        if(st)st.textContent='❌ ส่งของไม่สำเร็จ';
+      }finally{fresh.disabled=false;}
+    });
+  }
+
+  // Replace the mailbox opener so it never invokes the old localStorage mailbox.
+  replaceButton('openMailboxButton',open);
+
+  // Close button can use the existing handler; this replacement prevents duplicate
+  // open/close races caused by the old mailbox implementation.
+  replaceButton('mailboxClose',close);
+
+  // Poll the shared source and refresh the visible mailbox without flashing it.
+  setInterval(async()=>{
+    if(!user())return;
+    const panel=document.getElementById('mailboxPanel');
+    const wasOpen=panel&&!panel.classList.contains('hidden');
+    const before=unclaimed().map(g=>g.id).join('|');
+    await sync(false);
+    const after=unclaimed().map(g=>g.id).join('|');
+    refreshBadge();
+    if(wasOpen && before!==after)render();
+  },2000);
+
+  window.__farmV227Mail={version:'V227',sync,create,render,open,claim,unclaimed};
+  console.log('[V227] shared server mail ready');
+})();
+
