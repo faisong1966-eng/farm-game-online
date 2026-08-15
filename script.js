@@ -11550,7 +11550,7 @@ saveState();
 
 
 /* =========================================================
-   V214 — CLEAN SINGLE-PATH SERVER-WIDE ADMIN SYNC
+   V216 — ACTUAL SEPARATE-ADMIN SERVER SYNC
    Replaces the stacked V209/V210/V212/V213 wrappers.
    One button path -> normalize locally -> write ONE Supabase row -> all clients reload it.
    ========================================================= */
@@ -11606,13 +11606,12 @@ saveState();
     try{
       const {data,error}=await c.from(TABLE).select('config,updated_at').eq('id',ID).maybeSingle();
       if(error) throw error;
-      // First installation: bootstrap the one shared row from the current admin config instead of replacing it with {}.
+      // A normal game client must NEVER write its browser-local config to the shared row.
+      // Otherwise the second browser can overwrite the admin's server config during startup.
+      // The shared row is created by supabase_online_setup.sql and only an explicit admin Save
+      // is allowed to publish a new config.
       if(!data || !hasRealConfig(data.config)){
-        if(hasRealConfig(adminConfig)){
-          await writeServer();
-          console.log('[V214] bootstrapped shared admin config from current game config');
-          return true;
-        }
+        console.warn('[V216] Shared admin config is empty; waiting for an explicit admin save.');
         return false;
       }
       const stamp=String(data.updated_at||'');
@@ -11652,7 +11651,7 @@ saveState();
   }
 
   saveAdminConfig=saveServerAuthoritative;
-  window.__farmAuthoritativeAdmin={version:'V214',pull:()=>pull('manual',true),push:writeServer,save:saveServerAuthoritative};
+  window.__farmAuthoritativeAdmin={version:'V216',pull:()=>pull('manual',true),push:writeServer,save:saveServerAuthoritative};
 
   // Capture phase is now the ONLY forced admin-save path. It blocks all old bubble listeners captured by previous versions.
   document.addEventListener('click',function(e){

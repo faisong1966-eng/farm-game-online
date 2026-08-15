@@ -312,3 +312,6 @@ V136 PvP clarification fix:
 
 
 V210 patch: in-game ADMIN launcher button removed; admin settings/panel code retained. Shared admin config sync updated for Supabase server-wide settings.
+
+
+V216 FIX: separate admin page loads Supabase before script.js; startup pull cannot overwrite shared config with another browser's LocalStorage.
