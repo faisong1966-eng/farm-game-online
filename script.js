@@ -12338,3 +12338,135 @@ var v164OpenMailbox = window.v164OpenMailbox;
 
 /* V230 mailbox engine marker */
 (()=>{window.__farmV230Mailbox={version:'V230',engine:'V227'};console.log('[V230] mailbox patch loaded');})();
+
+
+/* =========================================================
+   V231 — SINGLE AUTHORITATIVE ONLINE MAILBOX
+   V230 proved the syntax/load path is clean. This patch fixes
+   the remaining UI race: old mailbox indicators/renderers can
+   overwrite the shared mailbox and leave a false badge.
+   The shared source remains game_server_mail + claims.
+   ========================================================= */
+(()=>{
+  const MAIL='game_server_mail', CLAIMS='game_server_mail_claims';
+  const db=()=>window.supabaseClient||null;
+  const username=()=>String(window.state?.username||'').trim().toLowerCase();
+  const esc=v=>typeof adminEsc==='function'?adminEsc(v):String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  let mails=[], claimed=new Set(), busy=false, opened=false, lastHtml='';
+
+  function active(g){return g && g.id && (!g.expiresAt || g.expiresAt>Date.now());}
+  function normalize(r){return {id:String(r.id),createdAt:Date.parse(r.created_at||'')||Date.now(),expiresAt:r.expires_at?(Date.parse(r.expires_at)||0):0,item:r.item||{},qty:Math.max(1,Math.floor(Number(r.qty)||1))};}
+
+  async function pull(){
+    const c=db(), u=username(); if(!c||!u||busy)return;
+    busy=true;
+    try{
+      const now=new Date().toISOString();
+      const {data,error}=await c.from(MAIL).select('id,created_at,expires_at,item,qty').or(`expires_at.is.null,expires_at.gt.${now}`).order('created_at',{ascending:false});
+      if(error)throw error;
+      mails=(data||[]).map(normalize);
+      claimed=new Set();
+      const ids=mails.map(x=>x.id);
+      if(ids.length){
+        const {data:rows,error:e}=await c.from(CLAIMS).select('mail_id').eq('username',u).in('mail_id',ids);
+        if(e)throw e; (rows||[]).forEach(x=>claimed.add(String(x.mail_id)));
+      }
+      syncBadge();
+      if(opened) render();
+    }catch(e){ console.error('[V231] mailbox sync failed',e); }
+    finally{busy=false;}
+  }
+
+  function unclaimed(){return mails.filter(active).filter(g=>!claimed.has(g.id));}
+  function syncBadge(){
+    const n=unclaimed().length;
+    const b=document.getElementById('mailboxBadge'), btn=document.getElementById('openMailboxButton');
+    if(b){b.textContent=n>9?'9+':String(n||'');b.classList.toggle('hidden',n===0);}
+    if(btn)btn.classList.toggle('has-mail',n>0);
+  }
+
+  function render(){
+    const box=document.getElementById('mailboxList'); if(!box)return;
+    const list=unclaimed();
+    let html='';
+    if(!list.length){
+      html='<div class="mailbox-empty">📭 <b>ยังไม่มีของขวัญใหม่</b><small>เมื่อแอดมินส่งของให้ทั้งเซิร์ฟเวอร์ ของจะปรากฏที่นี่</small></div>';
+    }else{
+      html=list.map(g=>{
+        const i=g.item||{}, when=new Date(g.createdAt).toLocaleString();
+        const left=g.expiresAt?Math.max(0,g.expiresAt-Date.now()):0;
+        const exp=g.expiresAt?` · เหลือ ${Math.ceil(left/60000)} นาที`:'';
+        return `<div class="mailbox-gift"><div class="mailbox-gift-icon">${esc(i.icon||'🎁')}</div><div class="mailbox-gift-info"><h3>${esc(i.name||'ของขวัญ')}</h3><p>${esc(i.description||'ของขวัญจากแอดมิน')}</p><small>จำนวน ${g.qty.toLocaleString()} · ส่งเมื่อ ${esc(when)}${exp}</small></div><button type="button" class="mailbox-claim" data-v231-claim="${esc(g.id)}">รับของ</button></div>`;
+      }).join('');
+    }
+    if(html!==lastHtml || box.innerHTML!==html){
+      box.innerHTML=html; lastHtml=html;
+      box.querySelectorAll('[data-v231-claim]').forEach(b=>b.addEventListener('click',()=>claim(String(b.dataset.v231Claim||''))));
+    }
+    syncBadge();
+  }
+
+  async function claim(id){
+    const c=db(),u=username(),g=mails.find(x=>x.id===id); if(!c||!u||!g||!active(g)||claimed.has(id))return render();
+    const btn=document.querySelector(`[data-v231-claim="${CSS.escape(id)}"]`); if(btn)btn.disabled=true;
+    try{
+      // First reserve the gift for this username. The PK (mail_id, username)
+      // prevents two tabs from claiming the same gift for the same account.
+      const {error:e}=await c.from(CLAIMS).insert({mail_id:id,username:u});
+      if(e && String(e.code)!=='23505')throw e;
+      if(String(e?.code)==='23505'){
+        claimed.add(id); render(); return;
+      }
+      // Apply the reward locally, then force an immediate online state flush.
+      const live={username:window.state?.username||'',state:window.state};
+      if(typeof window.v115Grant!=='function')throw new Error('v115Grant unavailable');
+      window.v115Grant(live,g.item||{},g.qty);
+      if(typeof window.saveState==='function')window.saveState();
+      if(window.__farmOnlinePlayersV226?.save) await window.__farmOnlinePlayersV226.save();
+      else if(window.__farmOnlinePlayers?.flush) await window.__farmOnlinePlayers.flush();
+      claimed.add(id);
+      try{syncCurrencyDisplays();renderRpgInventory();renderRpgBag();}catch(_){ }
+      console.log('[V231] gift delivered:',id,'to',u);
+      render();
+    }catch(e){
+      console.error('[V231] claim failed',e);
+      // If delivery failed after reservation, keep the mail visible locally so
+      // the player is not told the gift vanished. A later sync can retry safely.
+      claimed.delete(id); render();
+      alert('รับของออนไลน์ไม่สำเร็จ: '+(e.message||e));
+    }
+  }
+
+  async function open(){
+    opened=true; lastHtml='';
+    const p=document.getElementById('mailboxPanel'); if(p)p.classList.remove('hidden');
+    await pull(); render();
+  }
+  function close(){opened=false;const p=document.getElementById('mailboxPanel');if(p)p.classList.add('hidden');}
+
+  function replace(id,fn){
+    const old=document.getElementById(id); if(!old)return;
+    const fresh=old.cloneNode(true); old.replaceWith(fresh);
+    fresh.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();fn();});
+  }
+
+  // Replace the public mailbox controls one last time so earlier listeners cannot race.
+  replace('openMailboxButton',open); replace('mailboxClose',close);
+
+  // Stop legacy badge functions from deciding the visible count. They may still be
+  // called by older systems, but V231 immediately restores the authoritative count.
+  try{window.v164RefreshMailboxIndicator=syncBadge;}catch(_){ }
+  try{window.v164RenderMailbox=render;}catch(_){ }
+
+  document.addEventListener('click',e=>{
+    if(e.target?.closest?.('#openMailboxButton')){opened=true;setTimeout(()=>{document.getElementById('mailboxPanel')?.classList.remove('hidden');},0);}
+    if(e.target?.closest?.('#mailboxClose'))opened=false;
+  },true);
+
+  // Poll only the data; never toggle the panel. This prevents the one-second flash.
+  setInterval(()=>{if(username())pull();},3000);
+  setTimeout(()=>{if(username())pull();},500);
+
+  window.__farmV231Mailbox={version:'V231',pull,open,close,render,claim,unclaimed};
+  console.log('[V231] single authoritative mailbox ready');
+})();

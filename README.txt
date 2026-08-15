@@ -327,3 +327,6 @@ VERSION: V219 TRUE ONLINE PLAYER STATE SYNC
 
 
 V228: mailbox visibility lock added to prevent legacy mailbox code from hiding the open mailbox panel.
+
+
+V231: single authoritative online mailbox controller. Replace the whole deployed bundle.
