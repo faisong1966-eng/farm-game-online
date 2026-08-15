@@ -11389,3 +11389,268 @@ saveState();
   };
 })();
 
+
+/* =========================
+   V209 ONLINE FIX — SERVER MAILBOX GIFTS VIA SUPABASE
+   Replaces only the global admin-gift storage path.
+   Local game systems and existing gift UI remain unchanged.
+   ========================= */
+(()=>{
+  const MAIL_TABLE='game_server_mail';
+  const CLAIM_TABLE='game_server_mail_claims';
+  const MAIL_SYNC_MS=5000;
+  let mailSyncBusy=false;
+  let onlineMailCache=[];
+  let onlineClaimIds=new Set();
+  let lastMailSync=0;
+
+  function onlineClient(){return window.supabaseClient||null;}
+  function currentMailUser(){return String(state?.username||'').trim().toLowerCase();}
+  function mailToRow(g){
+    return {
+      id:String(g.id),
+      created_at:new Date(Number(g.createdAt)||Date.now()).toISOString(),
+      expires_at:g.expiresAt?new Date(Number(g.expiresAt)).toISOString():null,
+      item:g.item||{},
+      qty:Math.max(1,Math.floor(Number(g.qty)||1))
+    };
+  }
+  function rowToMail(r){
+    return {
+      id:String(r.id),
+      createdAt:Date.parse(r.created_at||'')||Date.now(),
+      expiresAt:r.expires_at?(Date.parse(r.expires_at)||0):0,
+      item:r.item||{},
+      qty:Math.max(1,Math.floor(Number(r.qty)||1)),
+      claims:{}
+    };
+  }
+  async function syncOnlineMail(force=false){
+    const client=onlineClient(), user=currentMailUser();
+    if(!client||!user||mailSyncBusy)return;
+    if(!force&&Date.now()-lastMailSync<1200)return;
+    mailSyncBusy=true;
+    try{
+      const nowIso=new Date().toISOString();
+      const {data:mail,error:mailError}=await client.from(MAIL_TABLE).select('*').or(`expires_at.is.null,expires_at.gt.${nowIso}`).order('created_at',{ascending:false});
+      if(mailError)throw mailError;
+      const rows=(mail||[]).map(rowToMail);
+      onlineMailCache=rows;
+      const ids=rows.map(x=>x.id);
+      onlineClaimIds=new Set();
+      if(ids.length){
+        const {data:claims,error:claimError}=await client.from(CLAIM_TABLE).select('mail_id').eq('username',user).in('mail_id',ids);
+        if(claimError)throw claimError;
+        (claims||[]).forEach(x=>onlineClaimIds.add(String(x.mail_id)));
+      }
+      lastMailSync=Date.now();
+    }catch(err){
+      console.warn('Supabase server mail sync failed; using local fallback',err);
+    }finally{mailSyncBusy=false;}
+  }
+
+  const v209LocalLoadMail=v164LoadMail;
+  const v209LocalSaveMail=v164SaveMail;
+
+  v164LoadMail=function(){
+    if(onlineClient()&&onlineMailCache.length)return onlineMailCache.map(v115Clone);
+    return v209LocalLoadMail();
+  };
+  v164SaveMail=function(list){
+    // Keep local cache only as an offline fallback. Supabase is the shared source online.
+    v209LocalSaveMail(list);
+  };
+
+  const v209OldCreateGift=v164CreateServerGift;
+  v164CreateServerGift=function(item,qty,durationMs){
+    const now=Date.now();
+    const gift={
+      id:'server-gift-'+now+'-'+Math.random().toString(36).slice(2),
+      createdAt:now,
+      expiresAt:now+Math.max(0,Number(durationMs)||0),
+      item:v115Clone(item),
+      qty:Math.max(1,Math.floor(Number(qty)||1)),
+      claims:{}
+    };
+    const client=onlineClient();
+    if(!client){
+      try{return v209OldCreateGift.apply(this,arguments);}catch(_){const list=v209LocalLoadMail();list.unshift(gift);v209LocalSaveMail(list);return gift;}
+    }
+    // Show immediately to the sender, then publish to Supabase for every player/browser.
+    onlineMailCache.unshift(v115Clone(gift));
+    lastMailSync=Date.now();
+    client.from(MAIL_TABLE).insert(mailToRow(gift)).then(({error})=>{
+      if(error){
+        console.error('Supabase server gift insert failed',error);
+        // Do not silently lose the gift if the online table is not ready.
+        const list=v209LocalLoadMail(); if(!list.some(x=>x.id===gift.id)){list.unshift(gift);v209LocalSaveMail(list);}
+        alert('ส่งของออนไลน์ไม่สำเร็จ: กรุณาตรวจ SQL Supabase ของ game_server_mail');
+        return;
+      }
+      syncOnlineMail(true).then(()=>{try{v164RefreshMailboxIndicator();}catch(_){}});
+    });
+    return gift;
+  };
+
+  v164UnclaimedGifts=function(){
+    const user=currentMailUser(),now=Date.now();
+    if(!user)return [];
+    const source=onlineClient()&&onlineMailCache.length?onlineMailCache:v209LocalLoadMail();
+    return source.filter(g=>g&&g.id&&(!g.expiresAt||Number(g.expiresAt)>now)&&
+      (onlineClient()&&onlineMailCache.length?!onlineClaimIds.has(String(g.id)):!g.claims?.[user]));
+  };
+
+  v164RenderMailbox=function(){
+    const listBox=document.getElementById('mailboxList');if(!listBox)return;
+    syncOnlineMail(false).then(()=>{try{v164RefreshMailboxIndicator();}catch(_){}});
+    const gifts=v164UnclaimedGifts();
+    if(!gifts.length){
+      listBox.innerHTML='<div class="mailbox-empty">📭 <b>ยังไม่มีของขวัญใหม่</b><small>เมื่อแอดมินส่งของให้ทั้งเซิร์ฟเวอร์ ของจะปรากฏที่นี่</small></div>';
+      v164RefreshMailboxIndicator();return;
+    }
+    listBox.innerHTML=gifts.map(g=>{
+      const item=g.item||{},when=new Date(g.createdAt||Date.now()).toLocaleString(),left=Math.max(0,Number(g.expiresAt||0)-Date.now());
+      return `<div class="mailbox-gift"><div class="mailbox-gift-icon">${adminEsc(item.icon||'🎁')}</div><div class="mailbox-gift-info"><h3>${adminEsc(item.name||'ของขวัญ')}</h3><p>${adminEsc(item.description||'ของขวัญจากแอดมิน')}</p><small>จำนวน ${Math.max(1,Number(g.qty)||1).toLocaleString()} · ส่งเมื่อ ${adminEsc(when)}${g.expiresAt?' · เหลือ '+adminEsc(v181DurationText(left)):''}</small></div><button type="button" class="mailbox-claim" data-v164-claim="${adminEsc(g.id)}">รับของ</button></div>`;
+    }).join('');
+    listBox.querySelectorAll('[data-v164-claim]').forEach(btn=>btn.addEventListener('click',async()=>{
+      const id=String(btn.dataset.v164Claim||''),user=currentMailUser();if(!id||!user)return;
+      const gift=(onlineClient()&&onlineMailCache.length?onlineMailCache:v209LocalLoadMail()).find(x=>String(x.id)===id);
+      if(!gift||onlineClaimIds.has(id)||(gift.expiresAt&&Number(gift.expiresAt)<=Date.now())){v164RenderMailbox();return;}
+      btn.disabled=true;
+      if(onlineClient()){
+        const {error}=await onlineClient().from(CLAIM_TABLE).insert({mail_id:id,username:user});
+        if(error){
+          // Unique violation means this account already claimed it elsewhere.
+          if(String(error.code)!=='23505'){console.error('Supabase mail claim failed',error);alert('รับของออนไลน์ไม่สำเร็จ กรุณาลองใหม่');btn.disabled=false;return;}
+        }
+        onlineClaimIds.add(id);
+      }else{
+        const list=v209LocalLoadMail(),localGift=list.find(x=>String(x.id)===id);if(!localGift){v164RenderMailbox();return;}localGift.claims=localGift.claims||{};localGift.claims[user]=Date.now();v209LocalSaveMail(list);
+      }
+      const live={username:state?.username||'',state};
+      v115Grant(live,gift.item||{},gift.qty);
+      try{saveState();render();syncCurrencyDisplays();renderRpgInventory();renderRpgBag();}catch(_){}
+      v164RenderMailbox();
+    }));
+    v164RefreshMailboxIndicator();
+  };
+
+  const v209OldShowGame=showGame;
+  showGame=function(){
+    const out=v209OldShowGame.apply(this,arguments);
+    syncOnlineMail(true).then(()=>{try{v164RefreshMailboxIndicator();}catch(_){}});
+    return out;
+  };
+  setInterval(()=>{
+    if(currentMailUser())syncOnlineMail(false).then(()=>{try{v164RefreshMailboxIndicator();}catch(_){}});
+  },MAIL_SYNC_MS);
+  setTimeout(()=>syncOnlineMail(true),1200);
+})();
+
+
+/* =========================
+   V209 ONLINE SHARED ADMIN CONFIG
+   All main-admin settings are stored as one shared Supabase config.
+   LocalStorage remains only as an offline/cache fallback.
+   ========================= */
+(function installV209SharedAdminConfig(){
+  const TABLE='game_admin_config';
+  const ROW_ID=1;
+  const TOWER_TABLE='game_shared_configs';
+  const TOWER_KEY='tower_rewards_v1';
+  let lastRemoteUpdated='';
+  let loading=false;
+  let lastPoll=0;
+
+  function client(){ return window.supabaseClient||null; }
+  function clone(v){ try{return JSON.parse(JSON.stringify(v));}catch(_){return v;} }
+
+  async function pullSharedAdminConfig(force=false){
+    const c=client();
+    if(!c||loading) return false;
+    if(!force && document.getElementById('adminPanel') && !document.getElementById('adminPanel').classList.contains('hidden')) return false;
+    loading=true;
+    try{
+      const {data,error}=await c.from(TABLE).select('config,updated_at').eq('id',ROW_ID).maybeSingle();
+      if(error) throw error;
+      if(!data?.config || typeof data.config!=='object') return false;
+      const stamp=String(data.updated_at||'');
+      if(!force && stamp && stamp===lastRemoteUpdated) return false;
+      adminConfig=adminMergeDefaults(clone(data.config),adminClone(ADMIN_DEFAULT));
+      Object.entries(crops).forEach(([id,c])=>{adminConfig.farm.crops[id]=adminConfig.farm.crops[id]||{name:c.name,icon:c.icon,cost:c.cost,sell:c.sell,growMs:c.growMs,enabled:true,currency:'coin'};});
+      ensureAdminLoginRewards();
+      syncLoginRewardConfigToGame();
+      applyAdminConfig();
+      try{localStorage.setItem(ADMIN_KEY,JSON.stringify(adminConfig));}catch(_){}
+      lastRemoteUpdated=stamp;
+      try{ if(document.getElementById('adminPanel') && !document.getElementById('adminPanel').classList.contains('hidden')) renderAdmin(); }catch(_){}
+      return true;
+    }catch(e){ console.warn('Shared admin config load failed:',e?.message||e); return false; }
+    finally{ loading=false; }
+  }
+
+  async function pushSharedAdminConfig(){
+    const c=client();
+    if(!c) return false;
+    try{
+      const payload={id:ROW_ID,config:clone(adminConfig),updated_at:new Date().toISOString()};
+      const {data,error}=await c.from(TABLE).upsert(payload,{onConflict:'id'}).select('updated_at').single();
+      if(error) throw error;
+      lastRemoteUpdated=String(data?.updated_at||payload.updated_at);
+      return true;
+    }catch(e){ console.warn('Shared admin config save failed:',e?.message||e); return false; }
+  }
+
+  // Catch the FINAL saveAdminConfig implementation, including all V99-V209 wrappers.
+  const previousSaveAdminConfig=saveAdminConfig;
+  saveAdminConfig=function(){
+    const result=previousSaveAdminConfig.apply(this,arguments);
+    pushSharedAdminConfig();
+    return result;
+  };
+
+  // Login reward cycle promotion also changes global admin configuration.
+  const previousEnsureLoginRewardState=ensureLoginRewardState;
+  ensureLoginRewardState=function(){
+    const before=JSON.stringify(adminConfig?.loginRewards||{});
+    const result=previousEnsureLoginRewardState.apply(this,arguments);
+    if(before!==JSON.stringify(adminConfig?.loginRewards||{})) pushSharedAdminConfig();
+    return result;
+  };
+
+  // Secondary admin tower rewards are also server-wide.
+  const previousSaveTowerRewards=saveTowerRewardsFromSecondaryAdmin;
+  saveTowerRewardsFromSecondaryAdmin=function(floor,rows){
+    previousSaveTowerRewards.apply(this,arguments);
+    const c=client();
+    if(c){
+      const config=loadGlobalTowerRewardConfig();
+      c.from(TOWER_TABLE).upsert({key:TOWER_KEY,config:clone(config),updated_at:new Date().toISOString()},{onConflict:'key'}).then(({error})=>{if(error)console.warn('Shared tower config save failed:',error.message);});
+    }
+  };
+
+  async function pullSharedTowerConfig(){
+    const c=client(); if(!c) return;
+    try{
+      const {data,error}=await c.from(TOWER_TABLE).select('config').eq('key',TOWER_KEY).maybeSingle();
+      if(error||!data?.config||typeof data.config!=='object') return;
+      localStorage.setItem(TOWER_GLOBAL_REWARD_CONFIG_KEY,JSON.stringify(data.config));
+      try{renderTowerFloorSelect(true);}catch(_){}
+    }catch(_){}
+  }
+
+  // Initial load: server data is authoritative whenever it exists.
+  setTimeout(()=>{ pullSharedAdminConfig(true); pullSharedTowerConfig(); },350);
+
+  // Polling keeps every player in sync even when Realtime is not enabled in Supabase.
+  setInterval(()=>{
+    const now=Date.now(); if(now-lastPoll<4500)return; lastPoll=now;
+    pullSharedAdminConfig(false); pullSharedTowerConfig();
+  },5000);
+
+  window.addEventListener('storage',e=>{
+    if(e.key===ADMIN_KEY){ try{pullSharedAdminConfig(true);}catch(_){} }
+  });
+
+  window.__farmSharedAdmin={pull:()=>pullSharedAdminConfig(true),push:pushSharedAdminConfig};
+})();
