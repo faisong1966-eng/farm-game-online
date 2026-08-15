@@ -11700,3 +11700,153 @@ saveState();
   boot(); setInterval(()=>{if(client())pull('poll');},4000);
   window.__farmServerWideAdmin={pull:()=>pull('manual'),push,subscribe};
 })();
+
+
+/* =========================
+   V210 TRUE ONLINE PLAYER STATE
+   Supabase is the authoritative store for online accounts and player data.
+   localStorage is cache only. Every save is queued to Supabase.
+   ========================= */
+(()=>{
+  const ACCOUNT_TABLE='game_player_accounts';
+  const STATE_TABLE='game_player_states';
+  let onlineSaveTimer=null, onlineSaveBusy=false, onlineLoadedUser='';
+
+  const online=()=>window.supabaseClient||null;
+  const deep=v=>JSON.parse(JSON.stringify(v));
+
+  async function onlineSaveNow(){
+    const c=online(), user=String(state?.username||'').trim();
+    if(!c||!user||onlineSaveBusy) return false;
+    onlineSaveBusy=true;
+    try{
+      const snapshot=deep(state);
+      snapshot.username=user;
+      const {error}=await c.from(STATE_TABLE).upsert({
+        username:user,data:snapshot,updated_at:new Date().toISOString()
+      },{onConflict:'username'});
+      if(error) throw error;
+      return true;
+    }catch(e){ console.error('ONLINE PLAYER SAVE FAILED:',e?.message||e); return false; }
+    finally{ onlineSaveBusy=false; }
+  }
+
+  function queueOnlineSave(){
+    clearTimeout(onlineSaveTimer);
+    onlineSaveTimer=setTimeout(()=>onlineSaveNow(),300);
+  }
+
+  // Replace the final save path: keep local cache, but always queue a server write.
+  const v210OldSaveState=saveState;
+  saveState=function(){
+    const out=v210OldSaveState.apply(this,arguments);
+    queueOnlineSave();
+    return out;
+  };
+  window.__farmOnlineSaveNow=onlineSaveNow;
+
+  async function waitClient(){
+    for(let i=0;i<80;i++){
+      if(online()) return online();
+      await new Promise(r=>setTimeout(r,100));
+    }
+    return null;
+  }
+
+  async function loadOnlineState(username){
+    const c=await waitClient();
+    if(!c) throw new Error('Supabase ยังไม่พร้อม');
+    const {data,error}=await c.from(STATE_TABLE).select('data').eq('username',username).maybeSingle();
+    if(error) throw error;
+    if(data?.data && typeof data.data==='object'){
+      state=data.data;
+      state.username=username;
+      try{localStorage.setItem(accountStateKey(username),JSON.stringify(state));localStorage.setItem(SAVE_KEY,JSON.stringify(state));}catch(_){}
+      onlineLoadedUser=username;
+      return true;
+    }
+    state=loadAccountState(username);
+    state.username=username;
+    await onlineSaveNow();
+    onlineLoadedUser=username;
+    return true;
+  }
+
+  async function onlineRegister(username,password,gender){
+    const c=await waitClient();
+    if(!c) throw new Error('Supabase ยังไม่พร้อม');
+    const {data:existing,error:checkErr}=await c.from(ACCOUNT_TABLE).select('username').eq('username',username).maybeSingle();
+    if(checkErr) throw checkErr;
+    if(existing) throw new Error('ชื่อผู้ใช้นี้ถูกใช้แล้ว');
+    const {error}=await c.from(ACCOUNT_TABLE).insert({username,password,gender,created_at:new Date().toISOString()});
+    if(error) throw error;
+    state=defaultState(); state.username=username; state.gender=gender;
+    await onlineSaveNow();
+    onlineLoadedUser=username;
+  }
+
+  async function onlineLogin(username,password){
+    const c=await waitClient();
+    if(!c) throw new Error('Supabase ยังไม่พร้อม');
+    const {data,error}=await c.from(ACCOUNT_TABLE).select('username,password,gender').eq('username',username).maybeSingle();
+    if(error) throw error;
+    if(!data || data.password!==password) throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+    await loadOnlineState(username);
+    state.gender=data.gender||state.gender||'male';
+    return true;
+  }
+
+  // Capture and replace old browser-only register/login handlers.
+  document.getElementById('registerButton')?.addEventListener('click',async e=>{
+    e.preventDefault(); e.stopImmediatePropagation();
+    const username=document.getElementById('registerUsernameInput').value.trim();
+    const password=document.getElementById('registerPasswordInput').value;
+    const confirm=document.getElementById('registerConfirmPasswordInput').value;
+    if(!username||!password) return alert('กรุณากรอกชื่อผู้ใช้และรหัสผ่าน');
+    if(password.length<4) return alert('รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร');
+    if(password!==confirm) return alert('ยืนยันรหัสผ่านไม่ตรงกัน');
+    try{
+      await onlineRegister(username,password,selectedGender);
+      localStorage.setItem(ACTIVE_ACCOUNT_KEY,username);
+      document.getElementById('passwordInput').value=password;
+      document.getElementById('usernameInput').value=username;
+      showGame();
+    }catch(err){ alert('สมัครบัญชีออนไลน์ไม่สำเร็จ: '+(err?.message||err)); }
+  },true);
+
+  document.getElementById('loginButton')?.addEventListener('click',async e=>{
+    e.preventDefault(); e.stopImmediatePropagation();
+    const username=usernameInput.value.trim();
+    const password=document.getElementById('passwordInput').value;
+    if(!username||!password) return alert('กรุณากรอกชื่อผู้ใช้และรหัสผ่าน');
+    try{
+      await onlineLogin(username,password);
+      localStorage.setItem(ACTIVE_ACCOUNT_KEY,username);
+      showGame();
+    }catch(err){ alert('เข้าสู่ระบบออนไลน์ไม่สำเร็จ: '+(err?.message||err)); }
+  },true);
+
+  // On an already logged-in cached session, server state wins as soon as Supabase is ready.
+  setTimeout(async()=>{
+    const user=String(localStorage.getItem(ACTIVE_ACCOUNT_KEY)||'').trim();
+    if(!user||onlineLoadedUser===user) return;
+    try{ await loadOnlineState(user); if(state?.username===user){ render(); syncCurrencyDisplays(); try{renderRpgInventory();renderRpgBag();}catch(_){} } }
+    catch(e){ console.warn('ONLINE PLAYER LOAD FAILED:',e?.message||e); }
+  },1200);
+
+  // Detect changes made from another browser/device to the same account.
+  setInterval(async()=>{
+    const c=online(),user=String(state?.username||'').trim();
+    if(!c||!user||onlineSaveBusy) return;
+    try{
+      const {data,error}=await c.from(STATE_TABLE).select('data,updated_at').eq('username',user).maybeSingle();
+      if(error||!data?.data) return;
+      const remote=JSON.stringify(data.data), local=JSON.stringify(state);
+      if(remote!==local && !onlineSaveTimer){
+        state=data.data; state.username=user;
+        localStorage.setItem(accountStateKey(user),JSON.stringify(state));
+        render(); syncCurrencyDisplays(); try{renderRpgInventory();renderRpgBag();}catch(_){}
+      }
+    }catch(_){}
+  },5000);
+})();
