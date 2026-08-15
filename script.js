@@ -9359,6 +9359,12 @@ saveState();
     tabs.querySelectorAll('[data-v181-secondary-tab]').forEach(b=>b.onclick=()=>{v181SecondaryTab=b.dataset.v181SecondaryTab;renderSecondaryAdmin();});
   };
   try{v115SnapshotCurrent();}catch(_){}
+  // V220: expose V115 helpers for later patch IIFEs.
+  window.v115Catalog=v115Catalog;
+  window.v115Clone=v115Clone;
+  window.v115LoadDirectory=v115LoadDirectory;
+  window.v115SaveDirectory=v115SaveDirectory;
+  window.v115SnapshotCurrent=v115SnapshotCurrent;
 })();
 
 
@@ -9520,7 +9526,7 @@ saveState();
       const id='equipment:'+String(source)+':star:'+stars;
       if(seen.has(id)) return;
       seen.add(id);
-      const data=v115Clone(base||{});
+      const data=window.v115Clone(base||{});
       data.stars=stars; data.level=stars; data.fixedStars=stars;
       data.kingRank=0; data.kingPowderArmed=false; data.durability=100; data.broken=false;
       out.push({
@@ -9570,7 +9576,7 @@ saveState();
       qty=Math.max(1,Math.floor(Number(qty)||1));
       const s=player.state||{}; s.gachaCollection=s.gachaCollection||[];
       for(let n=0;n<qty;n++){
-        const x=v115Clone(item.data), stars=Math.max(1,Math.min(8,Number(x.stars||x.level||x.fixedStars||1)));
+        const x=window.v115Clone(item.data), stars=Math.max(1,Math.min(8,Number(x.stars||x.level||x.fixedStars||1)));
         x.id='admin-'+Date.now()+'-'+n+'-'+Math.random().toString(36).slice(2);
         x.stars=stars; x.level=stars; x.fixedStars=stars; x.kingRank=0; x.kingPowderArmed=false;
         x.durability=100; x.broken=false;
@@ -11976,3 +11982,12 @@ saveState();
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
 
+
+
+/* =========================================================
+   V220 — STARTUP DIAGNOSTIC
+   ========================================================= */
+(()=>{
+  window.__farmV220={version:'V220',supabaseReady:!!window.supabaseClient};
+  console.log('[V220] Online patch loaded. Supabase client:', !!window.supabaseClient);
+})();
