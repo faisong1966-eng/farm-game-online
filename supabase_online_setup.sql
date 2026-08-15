@@ -172,3 +172,15 @@ begin
   begin alter publication supabase_realtime add table public.game_admin_config;
   exception when duplicate_object then null; end;
 end $$;
+
+-- V213 CLEAN AUTHORITATIVE ADMIN SYNC
+-- One shared row. Empty bootstrap data is ignored by the game until an admin saves real settings.
+insert into public.game_admin_config (id, config, updated_at)
+values (1, '{}'::jsonb, now())
+on conflict (id) do nothing;
+
+do $$
+begin
+  begin alter publication supabase_realtime add table public.game_admin_config;
+  exception when duplicate_object then null; end;
+end $$;
