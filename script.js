@@ -11550,132 +11550,19 @@ saveState();
 
 
 /* =========================================================
-   V216 — ACTUAL SEPARATE-ADMIN SERVER SYNC
-   Replaces the stacked V209/V210/V212/V213 wrappers.
-   One button path -> normalize locally -> write ONE Supabase row -> all clients reload it.
+   V218 — CLEAN SINGLE SERVER SYNC
    ========================================================= */
-(function installV214CleanServerAdmin(){
-  const TABLE='game_admin_config', ID=1, POLL_MS=2000;
-  const client=()=>window.supabaseClient||null;
-  const clone=v=>{try{return JSON.parse(JSON.stringify(v));}catch(_){return v;}};
-  const legacySave=saveAdminConfig;
-  let booted=false, saving=false, applying=false, lastStamp='', channel=null;
-
-  function isObject(v){return !!v&&typeof v==='object'&&!Array.isArray(v);}
-  function hasRealConfig(v){return isObject(v)&&Object.keys(v).length>0;}
-
-  function normalizeConfig(cfg){
-    adminConfig=adminMergeDefaults(clone(cfg||{}),adminClone(ADMIN_DEFAULT));
-    adminConfig.farm=adminConfig.farm||{};
-    adminConfig.farm.crops=adminConfig.farm.crops||{};
-    Object.entries(crops||{}).forEach(([id,crop])=>{
-      if(!adminConfig.farm.crops[id]){
-        adminConfig.farm.crops[id]={name:crop.name,icon:crop.icon,cost:crop.cost,sell:crop.sell,growMs:crop.growMs,enabled:true,currency:'coin'};
-      }
-    });
-    try{ensureAdminLoginRewards?.();}catch(_){}
-  }
-
-  function applyEverywhere(){
-    try{syncLoginRewardConfigToGame?.();}catch(e){console.warn('[V214] reward apply failed',e);}
-    try{applyAdminConfig?.();}catch(e){console.error('[V214] admin apply failed',e);}
-    // Rebuild existing RPG packs so monster HP/ATK/DEF/name/drop definitions do not stay on the admin browser only.
-    try{resetRpgPacks?.();}catch(e){console.warn('[V214] monster refresh failed',e);}
-    try{renderSeedShop?.();}catch(_){}
-    try{renderFarm?.();}catch(_){}
-    try{renderAdminDrivenRpgShop?.();}catch(_){}
-    try{renderRpgBag?.();renderRpgInventory?.();renderEquipmentBag?.();}catch(_){}
-    try{syncCurrencyDisplays?.();}catch(_){}
-  }
-
-  async function writeServer(){
-    const c=client();
-    if(!c) throw new Error('Supabase client not connected');
-    const payload={id:ID,config:clone(adminConfig),updated_at:new Date().toISOString()};
-    const {data,error}=await c.from(TABLE).upsert(payload,{onConflict:'id'}).select('updated_at').single();
-    if(error) throw error;
-    lastStamp=String(data?.updated_at||payload.updated_at);
-    try{localStorage.setItem(ADMIN_KEY,JSON.stringify(adminConfig));}catch(_){}
-    return true;
-  }
-
-  async function pull(reason='poll',force=false){
-    const c=client();
-    if(!c||applying||saving)return false;
-    applying=true;
-    try{
-      const {data,error}=await c.from(TABLE).select('config,updated_at').eq('id',ID).maybeSingle();
-      if(error) throw error;
-      // A normal game client must NEVER write its browser-local config to the shared row.
-      // Otherwise the second browser can overwrite the admin's server config during startup.
-      // The shared row is created by supabase_online_setup.sql and only an explicit admin Save
-      // is allowed to publish a new config.
-      if(!data || !hasRealConfig(data.config)){
-        console.warn('[V216] Shared admin config is empty; waiting for an explicit admin save.');
-        return false;
-      }
-      const stamp=String(data.updated_at||'');
-      if(!force&&stamp&&stamp===lastStamp)return false;
-      normalizeConfig(data.config);
-      lastStamp=stamp;
-      applyEverywhere();
-      try{localStorage.setItem(ADMIN_KEY,JSON.stringify(adminConfig));}catch(_){}
-      try{renderAdmin?.();}catch(_){}
-      console.log('[V214] server config applied:',reason,stamp);
-      return true;
-    }catch(e){
-      console.error('[V214] server config pull failed:',e?.message||e);
-      return false;
-    }finally{applying=false;}
-  }
-
-  async function saveServerAuthoritative(){
-    if(saving)return false;
-    saving=true;
-    const status=document.getElementById('adminStatus');
-    try{
-      if(status)status.textContent='⏳ กำลังบันทึกค่ากลางไปยังเซิร์ฟเวอร์...';
-      // Keep all old validation/normalization and UI behavior, but server success is the only success signal.
-      try{legacySave?.apply(this,arguments);}catch(e){console.warn('[V214] legacy normalization failed',e);}
-      applyEverywhere();
-      await writeServer();
-      if(status)status.textContent='🌐 สำเร็จ: ค่าถูกบันทึกบนเซิร์ฟเวอร์แล้ว ทุกเครื่องจะใช้ชุดเดียวกัน';
-      setTimeout(()=>{if(status&&status.textContent.includes('🌐'))status.textContent='พร้อมแก้ไข';},4000);
-      return true;
-    }catch(e){
-      console.error('[V214] ADMIN SERVER SAVE FAILED',e);
-      if(status)status.textContent='❌ บันทึกขึ้นเซิร์ฟเวอร์ไม่สำเร็จ · ยังไม่กระจายข้อมูล';
-      alert('บันทึกขึ้นเซิร์ฟเวอร์ไม่สำเร็จ: '+(e?.message||e));
-      return false;
-    }finally{saving=false;}
-  }
-
-  saveAdminConfig=saveServerAuthoritative;
-  window.__farmAuthoritativeAdmin={version:'V216',pull:()=>pull('manual',true),push:writeServer,save:saveServerAuthoritative};
-
-  // Capture phase is now the ONLY forced admin-save path. It blocks all old bubble listeners captured by previous versions.
-  document.addEventListener('click',function(e){
-    const btn=e.target?.closest?.('#adminSave');
-    if(!btn)return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    saveServerAuthoritative();
-  },true);
-
-  async function boot(){
-    if(booted)return;
-    if(!client()){setTimeout(boot,250);return;}
-    booted=true;
-    await pull('initial',true);
-    try{
-      channel=client().channel('farm-v214-clean-admin-sync')
-        .on('postgres_changes',{event:'INSERT',schema:'public',table:TABLE,filter:'id=eq.1'},()=>pull('realtime',true))
-        .on('postgres_changes',{event:'UPDATE',schema:'public',table:TABLE,filter:'id=eq.1'},()=>pull('realtime',true))
-        .subscribe();
-    }catch(e){console.warn('[V214] realtime unavailable; polling remains active',e);}
-    setInterval(()=>pull('poll',false),POLL_MS);
-  }
-  boot();
+(function(){
+  const TABLE='game_admin_config', ID=1, POLL_MS=2000; let lastStamp='',publishing=false;
+  const clone=x=>JSON.parse(JSON.stringify(x)); const client=()=>window.supabaseClient||window.supabase;
+  const stamp=r=>String(r?.updated_at||r?.version||'');
+  function collect(){document.querySelectorAll('[data-admin-key]').forEach(el=>{try{adminSet(el.dataset.adminKey,adminInputType(el))}catch(_){}})}
+  function apply(cfg){if(!cfg||typeof cfg!=='object')return false;adminConfig=adminMergeDefaults(clone(cfg),adminClone(ADMIN_DEFAULT));try{ensureAdminLoginRewards();syncLoginRewardConfigToGame();applyAdminConfig();resetRpgPacks()}catch(e){console.error('[V218] apply',e)}try{localStorage.setItem(ADMIN_KEY,JSON.stringify(adminConfig))}catch(_){}return true}
+  async function read(force=false){const sb=client();if(!sb?.from)return false;try{const {data,error}=await sb.from(TABLE).select('config,updated_at').eq('id',ID).maybeSingle();if(error)throw error;if(!data?.config||typeof data.config!=='object'||!Object.keys(data.config).length)return false;const st=stamp(data);if(force||st!==lastStamp){apply(data.config);lastStamp=st;console.log('[V218] server config applied',st)}return true}catch(e){console.error('[V218] read failed',e);return false}}
+  async function publish(){if(publishing)return false;const sb=client();if(!sb?.from){alert('❌ ไม่พบการเชื่อมต่อ Supabase');return false}publishing=true;try{collect();ensureAdminLoginRewards();const payload={id:ID,config:clone(adminConfig),updated_at:new Date().toISOString()};const {data,error}=await sb.from(TABLE).upsert(payload,{onConflict:'id'}).select('config,updated_at').single();if(error)throw error;apply(data?.config||payload.config);lastStamp=stamp(data||payload);const el=document.getElementById('adminStatus');if(el)el.textContent='🌐 บันทึกลงเซิร์ฟเวอร์แล้ว · ทุกเครื่องจะใช้ค่านี้';return true}catch(e){console.error('[V218] publish failed',e);const el=document.getElementById('adminStatus');if(el)el.textContent='❌ บันทึกลงเซิร์ฟเวอร์ไม่สำเร็จ';alert('❌ เซฟค่ากลางไม่สำเร็จ: '+(e.message||e));return false}finally{publishing=false}}
+  function boot(){const old=document.getElementById('adminSave');if(old){const fresh=old.cloneNode(true);old.replaceWith(fresh);fresh.addEventListener('click',e=>{e.preventDefault();e.stopImmediatePropagation();publish()})}read(true);setInterval(()=>read(false),POLL_MS);try{client()?.channel?.('v218_admin_config')?.on('postgres_changes',{event:'*',schema:'public',table:TABLE,filter:'id=eq.1'},()=>read(true)).subscribe()}catch(e){console.warn('[V218] realtime unavailable',e)}}
+  window.saveAdminConfig=publish;window.__farmAuthoritativeAdmin={version:'V218',pull:()=>read(true),save:publish,push:publish,serverOnly:true};
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
 
 /* =========================================================
@@ -11881,3 +11768,211 @@ saveState();
   }
   boot();
 })();
+
+
+
+/* =========================================================
+   V219 — TRUE ONLINE PLAYER ACCOUNT + STATE SYNC
+   Supabase is the shared source for accounts and player data.
+   Existing local accounts are migrated automatically on first login.
+   ========================================================= */
+(()=>{
+  const ACCOUNT_TABLE='game_player_accounts';
+  const STATE_TABLE='game_player_states';
+  const clone=v=>{try{return JSON.parse(JSON.stringify(v));}catch(_){return v;}};
+  const client=()=>window.supabaseClient||null;
+  let saveTimer=null, saveRevision=0, savingRevision=0;
+
+  function normalizeName(v){return String(v||'').trim();}
+  function localAccount(name){
+    try{return loadAccounts()?.[name]||null;}catch(_){return null;}
+  }
+  function localState(name){
+    try{return loadAccountState(name);}catch(_){return defaultState();}
+  }
+  function setLoginBusy(btn,busy,label){
+    if(!btn)return;
+    if(busy){
+      btn.dataset.v219Text=btn.textContent;
+      btn.disabled=true;
+      btn.textContent=label||'กำลังเชื่อมต่อ...';
+    }else{
+      btn.disabled=false;
+      btn.textContent=btn.dataset.v219Text||btn.textContent;
+    }
+  }
+  function cacheLocalAccount(name,account){
+    try{
+      const all=loadAccounts();
+      all[name]={...(all[name]||{}),...account};
+      saveAccounts(all);
+    }catch(_){}
+  }
+
+  async function writePlayerStateNow(){
+    const c=client();
+    const username=normalizeName(state?.username);
+    if(!c||!username)return false;
+    const revision=saveRevision;
+    if(revision<=savingRevision)return true;
+    savingRevision=revision;
+    const snapshot=clone(state);
+    snapshot.username=username;
+    try{
+      const {error}=await c.from(STATE_TABLE).upsert({
+        username,
+        data:snapshot,
+        updated_at:new Date().toISOString()
+      },{onConflict:'username'});
+      if(error)throw error;
+      return true;
+    }catch(e){
+      console.error('[V219] player state save failed',e);
+      return false;
+    }
+  }
+
+  const v219LocalSaveActive=saveActiveAccountState;
+  saveActiveAccountState=function(){
+    try{v219LocalSaveActive.apply(this,arguments);}catch(_){}
+    const username=normalizeName(state?.username);
+    if(!username)return;
+    saveRevision++;
+    clearTimeout(saveTimer);
+    saveTimer=setTimeout(()=>{writePlayerStateNow();},500);
+  };
+
+  async function loadOnlineState(name,gender){
+    const c=client();
+    if(!c)throw new Error('ไม่พบ Supabase Client');
+    const {data,error}=await c.from(STATE_TABLE).select('data').eq('username',name).maybeSingle();
+    if(error)throw error;
+    let next=data?.data&&typeof data.data==='object'?clone(data.data):null;
+    if(!next){
+      next=localState(name);
+      next.username=name;
+      next.gender=gender||next.gender||'male';
+      const {error:insertError}=await c.from(STATE_TABLE).upsert({
+        username:name,data:clone(next),updated_at:new Date().toISOString()
+      },{onConflict:'username'});
+      if(insertError)throw insertError;
+    }
+    next.username=name;
+    next.gender=gender||next.gender||'male';
+    state=next;
+    try{
+      localStorage.setItem(ACTIVE_ACCOUNT_KEY,name);
+      localStorage.setItem(accountStateKey(name),JSON.stringify(state));
+    }catch(_){}
+    return state;
+  }
+
+  async function migrateLocalAccount(name,password,local){
+    const c=client();
+    const gender=local?.gender||'male';
+    const {error:accountError}=await c.from(ACCOUNT_TABLE).insert({
+      username:name,password,gender
+    });
+    if(accountError && String(accountError.code)!=='23505')throw accountError;
+    const next=localState(name);
+    next.username=name;
+    next.gender=gender;
+    const {error:stateError}=await c.from(STATE_TABLE).upsert({
+      username:name,data:clone(next),updated_at:new Date().toISOString()
+    },{onConflict:'username'});
+    if(stateError)throw stateError;
+    return {password,gender};
+  }
+
+  async function onlineRegister(){
+    const name=normalizeName(document.getElementById('registerUsernameInput')?.value);
+    const password=String(document.getElementById('registerPasswordInput')?.value||'');
+    const confirm=String(document.getElementById('registerConfirmPasswordInput')?.value||'');
+    if(!name||!password)return alert('กรุณากรอกชื่อผู้ใช้และรหัสผ่าน');
+    if(password!==confirm)return alert('รหัสผ่านยืนยันไม่ตรงกัน');
+    if(name.length>20)return alert('ชื่อผู้ใช้ยาวเกิน 20 ตัวอักษร');
+    const c=client();
+    if(!c)return alert('❌ ไม่พบการเชื่อมต่อ Supabase');
+    const btn=document.getElementById('registerButton');
+    setLoginBusy(btn,true,'กำลังสมัคร...');
+    try{
+      const {data:exists,error:checkError}=await c.from(ACCOUNT_TABLE).select('username').eq('username',name).maybeSingle();
+      if(checkError)throw checkError;
+      if(exists)return alert('ชื่อผู้ใช้นี้ถูกใช้แล้ว');
+      const gender=document.querySelector('[data-gender].active')?.dataset.gender||'male';
+      const {error:accountError}=await c.from(ACCOUNT_TABLE).insert({username:name,password,gender});
+      if(accountError)throw accountError;
+      const next=defaultState();
+      next.username=name;
+      next.gender=gender;
+      const {error:stateError}=await c.from(STATE_TABLE).insert({
+        username:name,data:clone(next),updated_at:new Date().toISOString()
+      });
+      if(stateError)throw stateError;
+      state=next;
+      cacheLocalAccount(name,{password,gender,createdAt:Date.now()});
+      localStorage.setItem(ACTIVE_ACCOUNT_KEY,name);
+      localStorage.setItem(accountStateKey(name),JSON.stringify(state));
+      const loginName=document.getElementById('usernameInput');
+      const loginPass=document.getElementById('passwordInput');
+      if(loginName)loginName.value=name;
+      if(loginPass)loginPass.value=password;
+      showGame();
+    }catch(e){
+      console.error('[V219] register failed',e);
+      alert('❌ สมัครบัญชีออนไลน์ไม่สำเร็จ: '+(e.message||e)+'\n\nถ้ายังไม่ได้รัน SQL ให้รันไฟล์ V219_SUPABASE_SETUP.sql ก่อน');
+    }finally{setLoginBusy(btn,false);}
+  }
+
+  async function onlineLogin(){
+    const name=normalizeName(document.getElementById('usernameInput')?.value);
+    const password=String(document.getElementById('passwordInput')?.value||'');
+    if(!name||!password)return alert('กรุณากรอกชื่อผู้ใช้และรหัสผ่าน');
+    const c=client();
+    if(!c)return alert('❌ ไม่พบการเชื่อมต่อ Supabase');
+    const btn=document.getElementById('loginButton');
+    setLoginBusy(btn,true,'กำลังเข้าสู่ระบบ...');
+    try{
+      let {data:account,error}=await c.from(ACCOUNT_TABLE).select('username,password,gender').eq('username',name).maybeSingle();
+      if(error)throw error;
+      if(!account){
+        const local=localAccount(name);
+        if(!local||local.password!==password)return alert('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+        account=await migrateLocalAccount(name,password,local);
+      }
+      if(String(account.password)!==password)return alert('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+      await loadOnlineState(name,account.gender||'male');
+      cacheLocalAccount(name,{password:account.password,gender:account.gender||'male'});
+      showGame();
+    }catch(e){
+      console.error('[V219] login failed',e);
+      alert('❌ เข้าสู่ระบบออนไลน์ไม่สำเร็จ: '+(e.message||e)+'\n\nถ้ายังไม่ได้รัน SQL ให้รันไฟล์ V219_SUPABASE_SETUP.sql ก่อน');
+    }finally{setLoginBusy(btn,false);}
+  }
+
+  function replaceAuthButtons(){
+    [
+      ['registerButton',onlineRegister],
+      ['loginButton',onlineLogin]
+    ].forEach(([id,handler])=>{
+      const old=document.getElementById(id);
+      if(!old)return;
+      const fresh=old.cloneNode(true);
+      old.replaceWith(fresh);
+      fresh.addEventListener('click',e=>{e.preventDefault();handler();});
+    });
+  }
+
+  function boot(){
+    replaceAuthButtons();
+    window.__farmOnlinePlayers={
+      version:'V219',
+      flush:writePlayerStateNow,
+      save:()=>{saveRevision++;clearTimeout(saveTimer);return writePlayerStateNow();},
+      tables:{accounts:ACCOUNT_TABLE,states:STATE_TABLE}
+    };
+    console.log('[V219] online player account/state sync ready');
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+})();
+

@@ -315,3 +315,12 @@ V210 patch: in-game ADMIN launcher button removed; admin settings/panel code ret
 
 
 V216 FIX: separate admin page loads Supabase before script.js; startup pull cannot overwrite shared config with another browser's LocalStorage.
+
+VERSION: V219 TRUE ONLINE PLAYER STATE SYNC
+- Login and registration now use Supabase game_player_accounts.
+- Every player's game data is saved to Supabase game_player_states.
+- saveState() still keeps a local cache, but online Supabase state is also written automatically.
+- Existing local accounts are migrated automatically to Supabase the first time they successfully log in.
+- Admin global gifts continue to use game_server_mail and game_server_mail_claims.
+- Shared admin settings continue to use the single game_admin_config row.
+- Included V219_SUPABASE_SETUP.sql must be run once in Supabase SQL Editor.

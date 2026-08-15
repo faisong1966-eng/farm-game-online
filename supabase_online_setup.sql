@@ -247,3 +247,48 @@ begin
   begin alter publication supabase_realtime add table public.game_admin_config;
   exception when duplicate_object then null; end;
 end $$;
+
+
+-- =========================================================
+-- V217 CLEANUP: ONE SHARED ADMIN CONFIG ROW
+-- Run this once after uploading V217. It removes ALL old policies
+-- on this table, then recreates one read/insert/update set.
+-- =========================================================
+alter table public.game_admin_config enable row level security;
+
+-- Drop every old policy created by V209-V216.
+drop policy if exists "shared admin config read" on public.game_admin_config;
+drop policy if exists "shared admin config insert" on public.game_admin_config;
+drop policy if exists "shared admin config update" on public.game_admin_config;
+drop policy if exists "v212 admin config select" on public.game_admin_config;
+drop policy if exists "v212 admin config insert" on public.game_admin_config;
+drop policy if exists "v212 admin config update" on public.game_admin_config;
+drop policy if exists "v213 admin config select" on public.game_admin_config;
+drop policy if exists "v213 admin config insert" on public.game_admin_config;
+drop policy if exists "v213 admin config update" on public.game_admin_config;
+drop policy if exists "v214 admin config select" on public.game_admin_config;
+drop policy if exists "v214 admin config insert" on public.game_admin_config;
+drop policy if exists "v214 admin config update" on public.game_admin_config;
+
+create policy "v217 admin config read" on public.game_admin_config
+for select to anon, authenticated using (true);
+create policy "v217 admin config insert" on public.game_admin_config
+for insert to anon, authenticated with check (true);
+create policy "v217 admin config update" on public.game_admin_config
+for update to anon, authenticated using (true) with check (true);
+
+insert into public.game_admin_config(id,config,updated_at)
+values(1,'{}'::jsonb,now()) on conflict(id) do nothing;
+
+do $$ begin
+  begin alter publication supabase_realtime add table public.game_admin_config;
+  exception when duplicate_object then null; end;
+end $$;
+
+
+-- V218 CLEANUP: remove all existing policies on shared config, then recreate clean rules.
+DO $$ DECLARE r record; BEGIN FOR r IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='game_admin_config' LOOP EXECUTE format('DROP POLICY IF EXISTS %I ON public.game_admin_config', r.policyname); END LOOP; END $$;
+ALTER TABLE public.game_admin_config ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "v218 shared config read" ON public.game_admin_config FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "v218 config insert authenticated" ON public.game_admin_config FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "v218 config update authenticated" ON public.game_admin_config FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
