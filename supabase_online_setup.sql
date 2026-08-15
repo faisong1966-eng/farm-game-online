@@ -105,16 +105,17 @@ drop policy if exists "shared config update" on public.game_shared_configs;
 create policy "shared config update" on public.game_shared_configs
 for update to anon, authenticated using (true) with check (true);
 
-
--- V210 HARD SHARED DATA INITIALIZATION
--- Create the one authoritative rows used by every browser/player.
-insert into public.game_admin_config (id, config, updated_at)
-values (1, '{}'::jsonb, now())
+-- V210 SERVER-WIDE ADMIN SYNC HARDENING
+insert into public.game_admin_config (id, config)
+values (1, '{}'::jsonb)
 on conflict (id) do nothing;
 
-insert into public.game_shared_configs (key, config, updated_at)
-values ('tower_rewards_v1', '{}'::jsonb, now())
-on conflict (key) do nothing;
-
-create index if not exists game_server_mail_expires_at_idx on public.game_server_mail (expires_at);
-create index if not exists game_server_mail_claims_username_idx on public.game_server_mail_claims (username);
+do $$
+begin
+  begin alter publication supabase_realtime add table public.game_admin_config;
+  exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.game_shared_configs;
+  exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.game_server_mail;
+  exception when duplicate_object then null; end;
+end $$;

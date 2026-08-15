@@ -9344,7 +9344,7 @@ saveState();
     const box=document.getElementById('secondaryAdminContent');if(!box)return;const catalog=v115Catalog();
     box.innerHTML=`<div class="secondary-admin-tabs"><button data-v181-secondary-tab="tower">🗼 ควบคุมหอคอย</button><button class="active" data-v181-secondary-tab="gifts">🎁 แจกของผู้เล่น</button></div><div class="admin-note">แจกของให้ทั้งเซิร์ฟเวอร์เท่านั้น ผู้เล่นทุกคนจะเห็นในกล่องของขวัญและรับได้คนละ 1 ครั้ง กำหนดวัน ชั่วโมง และนาทีได้</div><div class="admin-card"><h3>🎁 แจกของเซิร์ฟเวอร์</h3><div class="admin-row"><label class="admin-field">เลือกของ<select id="v181GiftItem">${catalog.map(x=>`<option value="${adminEsc(x.id)}">${x.icon} ${adminEsc(x.name)} — ${adminEsc(x.description||'')}</option>`).join('')}</select></label><label class="admin-field">จำนวน<input id="v181GiftQty" type="number" min="1" value="1"></label></div><div class="admin-row"><label class="admin-field">วัน<input id="v181GiftDays" type="number" min="0" value="0"></label><label class="admin-field">ชั่วโมง<input id="v181GiftHours" type="number" min="0" value="0"></label><label class="admin-field">นาที<input id="v181GiftMinutes" type="number" min="0" value="10"></label></div><button type="button" class="admin-mini-btn" id="v181GiftSend">🌐 ส่งเข้ากล่องของขวัญเซิร์ฟเวอร์</button><div id="v181GiftStatus" class="admin-note"></div></div>`;
     box.querySelectorAll('[data-v181-secondary-tab]').forEach(b=>b.onclick=()=>{v181SecondaryTab=b.dataset.v181SecondaryTab;renderSecondaryAdmin();});
-    box.querySelector('#v181GiftSend').onclick=async()=>{const item=catalog.find(x=>x.id===box.querySelector('#v181GiftItem').value),qty=Math.max(1,Math.floor(Number(box.querySelector('#v181GiftQty').value)||1)),ms=v181DurationMs(box.querySelector('#v181GiftDays').value,box.querySelector('#v181GiftHours').value,box.querySelector('#v181GiftMinutes').value),st=box.querySelector('#v181GiftStatus');if(!item)return;if(ms<=0){if(st)st.textContent='⚠️ กรุณากำหนดเวลาอย่างน้อย 1 นาที';return;}if(st)st.textContent='⏳ กำลังส่งของขึ้นเซิร์ฟเวอร์...';try{await v164CreateServerGift(item,qty,ms);await syncOnlineMail(true);v164RefreshMailboxIndicator();if(st)st.textContent=`✅ ส่งสำเร็จทั้งเซิร์ฟเวอร์: ${item.name} x${qty.toLocaleString()} · รับได้คนละ 1 ครั้ง · หมดอายุใน ${v181DurationText(ms)}`;}catch(err){console.error('Server gift send failed',err);if(st)st.textContent='❌ ส่งไม่สำเร็จ: ของยังไม่ถูกแจก กรุณาตรวจ Supabase';alert('ส่งของไม่สำเร็จและระบบจะไม่เก็บไว้เฉพาะเครื่อง กรุณาตรวจ Supabase/SQL แล้วลองใหม่');}};
+    box.querySelector('#v181GiftSend').onclick=()=>{const item=catalog.find(x=>x.id===box.querySelector('#v181GiftItem').value),qty=Math.max(1,Math.floor(Number(box.querySelector('#v181GiftQty').value)||1)),ms=v181DurationMs(box.querySelector('#v181GiftDays').value,box.querySelector('#v181GiftHours').value,box.querySelector('#v181GiftMinutes').value),st=box.querySelector('#v181GiftStatus');if(!item)return;if(ms<=0){if(st)st.textContent='⚠️ กรุณากำหนดเวลาอย่างน้อย 1 นาที';return;}v164CreateServerGift(item,qty,ms);v164RefreshMailboxIndicator();if(st)st.textContent=`✅ ส่ง ${item.name} x${qty.toLocaleString()} เข้ากล่องของขวัญเซิร์ฟเวอร์แล้ว · รับได้คนละ 1 ครั้ง · หมดอายุใน ${v181DurationText(ms)}`;};
   };
   document.getElementById('openSecondaryAdmin')?.addEventListener('click',()=>{v181SecondaryTab='tower';});
   // Make the tower tab also able to switch to the new menu.
@@ -11453,7 +11453,7 @@ saveState();
   const v209LocalSaveMail=v164SaveMail;
 
   v164LoadMail=function(){
-    if(onlineClient()) return onlineMailCache.map(v115Clone);
+    if(onlineClient()&&onlineMailCache.length)return onlineMailCache.map(v115Clone);
     return v209LocalLoadMail();
   };
   v164SaveMail=function(list){
@@ -11461,9 +11461,8 @@ saveState();
     v209LocalSaveMail(list);
   };
 
-  // Online-only global gift creation: success is reported only after Supabase confirms the row.
-  // Never fall back to localStorage, otherwise an admin can think the whole server received a gift.
-  v164CreateServerGift=async function(item,qty,durationMs){
+  const v209OldCreateGift=v164CreateServerGift;
+  v164CreateServerGift=function(item,qty,durationMs){
     const now=Date.now();
     const gift={
       id:'server-gift-'+now+'-'+Math.random().toString(36).slice(2),
@@ -11474,17 +11473,29 @@ saveState();
       claims:{}
     };
     const client=onlineClient();
-    if(!client) throw new Error('Supabase client is unavailable');
-    const {error}=await client.from(MAIL_TABLE).insert(mailToRow(gift));
-    if(error) throw error;
-    await syncOnlineMail(true);
+    if(!client){
+      try{return v209OldCreateGift.apply(this,arguments);}catch(_){const list=v209LocalLoadMail();list.unshift(gift);v209LocalSaveMail(list);return gift;}
+    }
+    // Show immediately to the sender, then publish to Supabase for every player/browser.
+    onlineMailCache.unshift(v115Clone(gift));
+    lastMailSync=Date.now();
+    client.from(MAIL_TABLE).insert(mailToRow(gift)).then(({error})=>{
+      if(error){
+        console.error('Supabase server gift insert failed',error);
+        // Do not silently lose the gift if the online table is not ready.
+        const list=v209LocalLoadMail(); if(!list.some(x=>x.id===gift.id)){list.unshift(gift);v209LocalSaveMail(list);}
+        alert('ส่งของออนไลน์ไม่สำเร็จ: กรุณาตรวจ SQL Supabase ของ game_server_mail');
+        return;
+      }
+      syncOnlineMail(true).then(()=>{try{v164RefreshMailboxIndicator();}catch(_){}});
+    });
     return gift;
   };
 
   v164UnclaimedGifts=function(){
     const user=currentMailUser(),now=Date.now();
     if(!user)return [];
-    const source=onlineClient()?onlineMailCache:v209LocalLoadMail();
+    const source=onlineClient()&&onlineMailCache.length?onlineMailCache:v209LocalLoadMail();
     return source.filter(g=>g&&g.id&&(!g.expiresAt||Number(g.expiresAt)>now)&&
       (onlineClient()&&onlineMailCache.length?!onlineClaimIds.has(String(g.id)):!g.claims?.[user]));
   };
@@ -11503,7 +11514,7 @@ saveState();
     }).join('');
     listBox.querySelectorAll('[data-v164-claim]').forEach(btn=>btn.addEventListener('click',async()=>{
       const id=String(btn.dataset.v164Claim||''),user=currentMailUser();if(!id||!user)return;
-      const gift=(onlineClient()?onlineMailCache:v209LocalLoadMail()).find(x=>String(x.id)===id);
+      const gift=(onlineClient()&&onlineMailCache.length?onlineMailCache:v209LocalLoadMail()).find(x=>String(x.id)===id);
       if(!gift||onlineClaimIds.has(id)||(gift.expiresAt&&Number(gift.expiresAt)<=Date.now())){v164RenderMailbox();return;}
       btn.disabled=true;
       if(onlineClient()){
@@ -11644,20 +11655,48 @@ saveState();
   window.__farmSharedAdmin={pull:()=>pullSharedAdminConfig(true),push:pushSharedAdminConfig};
 })();
 
-
-/* V210 HARD SERVER-WIDE ADMIN GUARANTEE
-   All admin config writes must reach Supabase. localStorage is cache only, never the authority. */
+/* V210 SERVER-WIDE ADMIN SYNC HARDENING */
 (function(){
-  if(!window.__farmSharedAdmin) return;
-  const oldPush=window.__farmSharedAdmin.push;
-  let lastFailure='';
-  window.__farmSharedAdmin.push=async function(){
-    const ok=await oldPush();
-    if(!ok){
-      lastFailure='การบันทึกค่าแอดมินขึ้นเซิร์ฟเวอร์ไม่สำเร็จ';
-      console.error(lastFailure);
-      if(document.body.classList.contains('admin-page-mode')) alert('❌ '+lastFailure+'\nการเปลี่ยนแปลงนี้ยังไม่ถือว่าส่งผลกับทั้งเซิร์ฟเวอร์ กรุณาตรวจ Supabase แล้วบันทึกใหม่');
-    }else lastFailure='';
-    return ok;
+  const CONFIG_TABLE='game_admin_config', CONFIG_ID=1;
+  let channel=null, saving=false;
+  const client=()=>window.supabaseClient||null;
+  const clone=v=>{try{return JSON.parse(JSON.stringify(v));}catch(_){return v;}};
+  async function pull(reason='sync'){
+    const c=client(); if(!c)return false;
+    try{
+      const {data,error}=await c.from(CONFIG_TABLE).select('config,updated_at').eq('id',CONFIG_ID).maybeSingle();
+      if(error)throw error; if(!data?.config||typeof data.config!=='object')return false;
+      adminConfig=adminMergeDefaults(clone(data.config),adminClone(ADMIN_DEFAULT));
+      Object.entries(crops).forEach(([id,crop])=>{adminConfig.farm.crops[id]=adminConfig.farm.crops[id]||{name:crop.name,icon:crop.icon,cost:crop.cost,sell:crop.sell,growMs:crop.growMs,enabled:true,currency:'coin'};});
+      ensureAdminLoginRewards?.(); syncLoginRewardConfigToGame?.(); applyAdminConfig?.();
+      try{if(typeof resetRpgPacks==='function')resetRpgPacks();}catch(e){console.warn('V210 monster refresh failed',e);}
+      try{localStorage.setItem(ADMIN_KEY,JSON.stringify(adminConfig));}catch(_){}
+      try{renderAdmin?.();}catch(_){}
+      console.log('V210 shared config applied',reason); return true;
+    }catch(e){console.warn('V210 shared config pull failed',e?.message||e);return false;}
+  }
+  async function push(){
+    const c=client(); if(!c)throw new Error('Supabase client not connected');
+    const {error}=await c.from(CONFIG_TABLE).upsert({id:CONFIG_ID,config:clone(adminConfig),updated_at:new Date().toISOString()},{onConflict:'id'});
+    if(error)throw error; return true;
+  }
+  const previousSave=saveAdminConfig;
+  saveAdminConfig=async function(){
+    if(saving)return false; saving=true; const status=document.getElementById('adminStatus');
+    try{
+      previousSave.apply(this,arguments);
+      if(status)status.textContent='⏳ กำลังบันทึกและกระจายไปทั้งเซิร์ฟเวอร์...';
+      await push();
+      if(status){status.textContent='🌐 บันทึกบนเซิร์ฟเวอร์แล้ว · ผู้เล่นทุกคนจะรับค่ากลางทันที';setTimeout(()=>{if(status.textContent.includes('🌐'))status.textContent='พร้อมแก้ไข';},3500);}
+      return true;
+    }catch(e){console.error('V210 global save failed',e);if(status)status.textContent='❌ บันทึกลงเซิร์ฟเวอร์ไม่สำเร็จ · ตรวจ Supabase SQL / RLS';alert('บันทึกออนไลน์ไม่สำเร็จ: '+(e?.message||e));return false;}
+    finally{saving=false;}
   };
+  function subscribe(){
+    const c=client(); if(!c||channel)return;
+    channel=c.channel('farm-game-global-admin-v210').on('postgres_changes',{event:'*',schema:'public',table:CONFIG_TABLE,filter:'id=eq.1'},()=>pull('realtime')).subscribe();
+  }
+  function boot(){if(!client()){setTimeout(boot,500);return;}pull('initial');subscribe();}
+  boot(); setInterval(()=>{if(client())pull('poll');},4000);
+  window.__farmServerWideAdmin={pull:()=>pull('manual'),push,subscribe};
 })();

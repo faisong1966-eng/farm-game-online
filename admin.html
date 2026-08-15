@@ -1102,19 +1102,41 @@ body.admin-page-mode .admin-overlay:not(.hidden){display:block!important}
   <button type="button" id="adminPageSecondary">🛡️ แอดมินรอง</button>
   <button type="button" id="adminPageGame">🎮 กลับหน้าเกม</button>
 </div>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-config.js"></script>
 <script src="supabase-client.js"></script>
 <script src="script.js"></script>
+
 <script>
-(function(){
-  function showMain(){document.body.classList.add('admin-page-mode');document.getElementById('secondaryAdminPanel')?.classList.add('hidden');document.getElementById('adminPanel')?.classList.remove('hidden');try{window.renderAdmin?.();}catch(e){console.error(e);}}
-  function showSecondary(){document.body.classList.add('admin-page-mode');document.getElementById('adminPanel')?.classList.add('hidden');document.getElementById('secondaryAdminPanel')?.classList.remove('hidden');try{window.renderSecondaryAdmin?.();}catch(e){console.error(e);}}
-  document.getElementById('adminPageMain')?.addEventListener('click',showMain);
-  document.getElementById('adminPageSecondary')?.addEventListener('click',showSecondary);
-  document.getElementById('adminPageGame')?.addEventListener('click',()=>location.href='./index.html');
+(function () {
+  function openMainAdmin() {
+    document.body.classList.add('admin-page-mode');
+    document.getElementById('secondaryAdminPanel')?.classList.add('hidden');
+    const panel = document.getElementById('adminPanel');
+    panel?.classList.remove('hidden');
+    try { window.renderAdmin?.(); } catch (e) { console.error('Admin render error:', e); }
+  }
+
+  function openSecondaryAdmin() {
+    document.body.classList.add('admin-page-mode');
+    document.getElementById('adminPanel')?.classList.add('hidden');
+    const panel = document.getElementById('secondaryAdminPanel');
+    panel?.classList.remove('hidden');
+    try { window.renderSecondaryAdmin?.(); } catch (e) { console.error('Secondary admin render error:', e); }
+  }
+
   document.body.classList.add('admin-page-mode');
-  showMain();
+
+  document.getElementById('adminPageMain')?.addEventListener('click', openMainAdmin);
+  document.getElementById('adminPageSecondary')?.addEventListener('click', openSecondaryAdmin);
+  document.getElementById('adminPageGame')?.addEventListener('click', function () {
+    window.location.href = './';
+  });
+
+  openMainAdmin();
 })();
 </script>
+</body>
+</html>
 
