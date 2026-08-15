@@ -9360,12 +9360,22 @@ saveState();
   };
   try{v115SnapshotCurrent();}catch(_){}
   // V220: expose V115 helpers for later patch IIFEs.
+  window.v115Grant=v115Grant;
   window.v115Catalog=v115Catalog;
   window.v115Clone=v115Clone;
   window.v115LoadDirectory=v115LoadDirectory;
   window.v115SaveDirectory=v115SaveDirectory;
   window.v115SnapshotCurrent=v115SnapshotCurrent;
 })();
+
+/* V221 — bridge V115 helpers to later version scopes */
+var v115Grant = window.v115Grant;
+var v115Catalog = window.v115Catalog;
+var v115Clone = window.v115Clone;
+var v115LoadDirectory = window.v115LoadDirectory;
+var v115SaveDirectory = window.v115SaveDirectory;
+var v115SnapshotCurrent = window.v115SnapshotCurrent;
+
 
 
 /* =========================
@@ -11990,4 +12000,11 @@ saveState();
 (()=>{
   window.__farmV220={version:'V220',supabaseReady:!!window.supabaseClient};
   console.log('[V220] Online patch loaded. Supabase client:', !!window.supabaseClient);
+})();
+
+
+/* V221 diagnostic */
+(()=>{
+  window.__farmV221={version:'V221',v115GrantReady:typeof window.v115Grant==='function',supabaseReady:!!window.supabaseClient};
+  console.log('[V221] V115 grant bridge ready:', typeof window.v115Grant==='function', 'Supabase:', !!window.supabaseClient);
 })();
