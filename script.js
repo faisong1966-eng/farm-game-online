@@ -10714,7 +10714,8 @@ var v164OpenMailbox = window.v164OpenMailbox;
 
   // Replace mailbox opener/renderer behavior with the extended version.
   document.getElementById("openMailboxButton")?.addEventListener("click",()=>{document.getElementById("mailboxPanel")?.classList.remove("hidden");v1642RenderMailbox();});
-  setInterval(()=>{v1642Indicator();if(!document.getElementById("mailboxPanel")?.classList.contains("hidden"))v1642RenderMailbox();},5000);
+  /* V229: disabled legacy localStorage mailbox renderer.
+       It was overwriting the shared Supabase mailbox every 5 seconds. */
   window.addEventListener("storage",e=>{if(e.key===V1642_MAIL_KEY){v1642Indicator();}});
   try{v1642Indicator();}catch(_){}
 })();
@@ -11607,7 +11608,7 @@ var v164OpenMailbox = window.v164OpenMailbox;
    mailbox truth. Until Supabase finishes loading, the badge stays hidden.
    This removes the "red badge for 1 second then disappears" bug.
    ========================================================= */
-(()=>{
+(()=>{ return; /* V229: V215 disabled; V227 is authoritative */{
   const MAIL_TABLE='game_server_mail';
   const CLAIM_TABLE='game_server_mail_claims';
   const POLL_MS=2000;
@@ -12529,4 +12530,20 @@ var v164OpenMailbox = window.v164OpenMailbox;
   };
 
   console.log('[V228] mailbox visibility lock ready');
+})();
+
+
+/* =========================================================
+   V229 — SINGLE MAILBOX ENGINE
+   V227 is now the only active mailbox renderer/source of truth.
+   Legacy V215 and V164.2 periodic render paths are disabled.
+   ========================================================= */
+(()=>{
+  window.__farmV229Mailbox = {
+    version: 'V229',
+    engine: 'V227',
+    source: 'game_server_mail',
+    status: 'single-renderer'
+  };
+  console.log('[V229] single mailbox engine active — V227 only');
 })();

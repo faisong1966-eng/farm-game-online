@@ -327,3 +327,5 @@ VERSION: V219 TRUE ONLINE PLAYER STATE SYNC
 
 
 V228: mailbox visibility lock added to prevent legacy mailbox code from hiding the open mailbox panel.
+
+V229: disabled duplicate V215 mailbox engine and legacy V164.2 periodic localStorage renderer. V227 is the single shared mailbox engine.
