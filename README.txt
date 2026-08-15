@@ -309,6 +309,3 @@ V136 PvP clarification fix:
 - Starting a new PvP match resets only the local player's HP/Mana item-use counters to 3/3.
 - The opponent is treated as a real-player data proxy controlled by AI; its matched player data is not overwritten or reset to 3/3 when our match starts.
 - PvP-only behavior and the existing instant-aggro/combat logic remain unchanged.
-
-
-V210 patch: in-game ADMIN launcher button removed; admin settings/panel code retained. Shared admin config sync updated for Supabase server-wide settings.

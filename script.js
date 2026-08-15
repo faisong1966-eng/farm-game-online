@@ -11549,275 +11549,108 @@ saveState();
 
 
 /* =========================
-   V210 TRUE ONLINE PLAYER STATE
-   Supabase is the authoritative store for online accounts and player data.
-   localStorage is cache only. Every save is queued to Supabase.
+   V209 ONLINE SHARED ADMIN CONFIG
+   All main-admin settings are stored as one shared Supabase config.
+   LocalStorage remains only as an offline/cache fallback.
    ========================= */
-(()=>{
-  const ACCOUNT_TABLE='game_player_accounts';
-  const STATE_TABLE='game_player_states';
-  let onlineSaveTimer=null, onlineSaveBusy=false, onlineLoadedUser='';
+(function installV209SharedAdminConfig(){
+  const TABLE='game_admin_config';
+  const ROW_ID=1;
+  const TOWER_TABLE='game_shared_configs';
+  const TOWER_KEY='tower_rewards_v1';
+  let lastRemoteUpdated='';
+  let loading=false;
+  let lastPoll=0;
 
-  const online=()=>window.supabaseClient||null;
-  const deep=v=>JSON.parse(JSON.stringify(v));
+  function client(){ return window.supabaseClient||null; }
+  function clone(v){ try{return JSON.parse(JSON.stringify(v));}catch(_){return v;} }
 
-  async function onlineSaveNow(){
-    const c=online(), user=String(state?.username||'').trim();
-    if(!c||!user||onlineSaveBusy) return false;
-    onlineSaveBusy=true;
+  async function pullSharedAdminConfig(force=false){
+    const c=client();
+    if(!c||loading) return false;
+    if(!force && document.getElementById('adminPanel') && !document.getElementById('adminPanel').classList.contains('hidden')) return false;
+    loading=true;
     try{
-      const snapshot=deep(state);
-      snapshot.username=user;
-      const {error}=await c.from(STATE_TABLE).upsert({
-        username:user,data:snapshot,updated_at:new Date().toISOString()
-      },{onConflict:'username'});
+      const {data,error}=await c.from(TABLE).select('config,updated_at').eq('id',ROW_ID).maybeSingle();
       if(error) throw error;
-      return true;
-    }catch(e){ console.error('ONLINE PLAYER SAVE FAILED:',e?.message||e); return false; }
-    finally{ onlineSaveBusy=false; }
-  }
-
-  function queueOnlineSave(){
-    clearTimeout(onlineSaveTimer);
-    onlineSaveTimer=setTimeout(()=>onlineSaveNow(),300);
-  }
-
-  // Replace the final save path: keep local cache, but always queue a server write.
-  const v210OldSaveState=saveState;
-  saveState=function(){
-    const out=v210OldSaveState.apply(this,arguments);
-    queueOnlineSave();
-    return out;
-  };
-  window.__farmOnlineSaveNow=onlineSaveNow;
-
-  async function waitClient(){
-    for(let i=0;i<80;i++){
-      if(online()) return online();
-      await new Promise(r=>setTimeout(r,100));
-    }
-    return null;
-  }
-
-  async function loadOnlineState(username){
-    const c=await waitClient();
-    if(!c) throw new Error('Supabase ยังไม่พร้อม');
-    const {data,error}=await c.from(STATE_TABLE).select('data').eq('username',username).maybeSingle();
-    if(error) throw error;
-    if(data?.data && typeof data.data==='object'){
-      state=data.data;
-      state.username=username;
-      try{localStorage.setItem(accountStateKey(username),JSON.stringify(state));localStorage.setItem(SAVE_KEY,JSON.stringify(state));}catch(_){}
-      onlineLoadedUser=username;
-      return true;
-    }
-    state=loadAccountState(username);
-    state.username=username;
-    await onlineSaveNow();
-    onlineLoadedUser=username;
-    return true;
-  }
-
-  async function onlineRegister(username,password,gender){
-    const c=await waitClient();
-    if(!c) throw new Error('Supabase ยังไม่พร้อม');
-    const {data:existing,error:checkErr}=await c.from(ACCOUNT_TABLE).select('username').eq('username',username).maybeSingle();
-    if(checkErr) throw checkErr;
-    if(existing) throw new Error('ชื่อผู้ใช้นี้ถูกใช้แล้ว');
-    const {error}=await c.from(ACCOUNT_TABLE).insert({username,password,gender,created_at:new Date().toISOString()});
-    if(error) throw error;
-    state=defaultState(); state.username=username; state.gender=gender;
-    await onlineSaveNow();
-    onlineLoadedUser=username;
-  }
-
-  async function onlineLogin(username,password){
-    const c=await waitClient();
-    if(!c) throw new Error('Supabase ยังไม่พร้อม');
-    const {data,error}=await c.from(ACCOUNT_TABLE).select('username,password,gender').eq('username',username).maybeSingle();
-    if(error) throw error;
-    if(!data || data.password!==password) throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
-    await loadOnlineState(username);
-    state.gender=data.gender||state.gender||'male';
-    return true;
-  }
-
-  // Capture and replace old browser-only register/login handlers.
-  document.getElementById('registerButton')?.addEventListener('click',async e=>{
-    e.preventDefault(); e.stopImmediatePropagation();
-    const username=document.getElementById('registerUsernameInput').value.trim();
-    const password=document.getElementById('registerPasswordInput').value;
-    const confirm=document.getElementById('registerConfirmPasswordInput').value;
-    if(!username||!password) return alert('กรุณากรอกชื่อผู้ใช้และรหัสผ่าน');
-    if(password.length<4) return alert('รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร');
-    if(password!==confirm) return alert('ยืนยันรหัสผ่านไม่ตรงกัน');
-    try{
-      await onlineRegister(username,password,selectedGender);
-      localStorage.setItem(ACTIVE_ACCOUNT_KEY,username);
-      document.getElementById('passwordInput').value=password;
-      document.getElementById('usernameInput').value=username;
-      showGame();
-    }catch(err){ alert('สมัครบัญชีออนไลน์ไม่สำเร็จ: '+(err?.message||err)); }
-  },true);
-
-  document.getElementById('loginButton')?.addEventListener('click',async e=>{
-    e.preventDefault(); e.stopImmediatePropagation();
-    const username=usernameInput.value.trim();
-    const password=document.getElementById('passwordInput').value;
-    if(!username||!password) return alert('กรุณากรอกชื่อผู้ใช้และรหัสผ่าน');
-    try{
-      await onlineLogin(username,password);
-      localStorage.setItem(ACTIVE_ACCOUNT_KEY,username);
-      showGame();
-    }catch(err){ alert('เข้าสู่ระบบออนไลน์ไม่สำเร็จ: '+(err?.message||err)); }
-  },true);
-
-  // On an already logged-in cached session, server state wins as soon as Supabase is ready.
-  setTimeout(async()=>{
-    const user=String(localStorage.getItem(ACTIVE_ACCOUNT_KEY)||'').trim();
-    if(!user||onlineLoadedUser===user) return;
-    try{ await loadOnlineState(user); if(state?.username===user){ render(); syncCurrencyDisplays(); try{renderRpgInventory();renderRpgBag();}catch(_){} } }
-    catch(e){ console.warn('ONLINE PLAYER LOAD FAILED:',e?.message||e); }
-  },1200);
-
-  // Detect changes made from another browser/device to the same account.
-  setInterval(async()=>{
-    const c=online(),user=String(state?.username||'').trim();
-    if(!c||!user||onlineSaveBusy) return;
-    try{
-      const {data,error}=await c.from(STATE_TABLE).select('data,updated_at').eq('username',user).maybeSingle();
-      if(error||!data?.data) return;
-      const remote=JSON.stringify(data.data), local=JSON.stringify(state);
-      if(remote!==local && !onlineSaveTimer){
-        state=data.data; state.username=user;
-        localStorage.setItem(accountStateKey(user),JSON.stringify(state));
-        render(); syncCurrencyDisplays(); try{renderRpgInventory();renderRpgBag();}catch(_){}
-      }
-    }catch(_){}
-  },5000);
-})();
-
-
-
-/* =========================================================
-   V213 CLEAN AUTHORITATIVE SERVER ADMIN SYNC
-   Single final path only:
-   Admin Save -> normalize legacy config -> Supabase -> verify -> apply locally
-   Other browsers: Supabase Realtime/Poll -> verify -> apply
-   LocalStorage is cache only and is NEVER treated as a successful server save.
-   ========================================================= */
-(function installV213CleanServerAdmin(){
-  const TABLE='game_admin_config', ID=1;
-  const client=()=>window.supabaseClient||null;
-  const clone=v=>{try{return JSON.parse(JSON.stringify(v));}catch(_){return v;}};
-  const stable=v=>{
-    if(v===null||typeof v!=='object')return JSON.stringify(v);
-    if(Array.isArray(v))return '['+v.map(stable).join(',')+']';
-    return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+stable(v[k])).join(',')+'}';
-  };
-  let booted=false, pulling=false, saving=false, lastStamp='', pollId=null;
-
-  function isRealConfig(cfg){
-    return !!cfg && typeof cfg==='object' && !Array.isArray(cfg) && Object.keys(cfg).length>0;
-  }
-  function normalize(cfg){
-    adminConfig=adminMergeDefaults(clone(cfg),adminClone(ADMIN_DEFAULT));
-    adminConfig.farm=adminConfig.farm||{};
-    adminConfig.farm.crops=adminConfig.farm.crops||{};
-    Object.entries(crops||{}).forEach(([id,x])=>{
-      if(!adminConfig.farm.crops[id]) adminConfig.farm.crops[id]={name:x.name,icon:x.icon,cost:x.cost,sell:x.sell,growMs:x.growMs,enabled:true,currency:'coin'};
-    });
-  }
-  function applySharedConfig(reason){
-    try{ensureAdminLoginRewards?.();}catch(_){}
-    try{syncLoginRewardConfigToGame?.();}catch(_){}
-    try{applyAdminConfig?.();}catch(e){console.error('[V213] applyAdminConfig failed',e);}
-    try{window.applyLiveMonsterAdmin?.();}catch(e){console.error('[V213] live monster apply failed',e);}
-    try{renderAdminDrivenRpgShop?.();renderSeedShop?.();}catch(_){}
-    try{localStorage.setItem(ADMIN_KEY,JSON.stringify(adminConfig));}catch(_){}
-    try{if(!document.getElementById('adminPanel')?.classList.contains('hidden'))renderAdmin?.();}catch(_){}
-    console.log('[V213] shared admin config applied:',reason);
-  }
-  async function pull(reason='poll'){
-    const c=client();
-    if(!c||pulling||saving)return false;
-    pulling=true;
-    try{
-      const {data,error}=await c.from(TABLE).select('config,updated_at').eq('id',ID).maybeSingle();
-      if(error)throw error;
-      if(!data||!isRealConfig(data.config))return false; // SQL may create an empty bootstrap row; never overwrite clients with it.
+      if(!data?.config || typeof data.config!=='object') return false;
       const stamp=String(data.updated_at||'');
-      if(stamp && stamp===lastStamp)return false;
-      normalize(data.config);
-      lastStamp=stamp;
-      applySharedConfig(reason);
+      if(!force && stamp && stamp===lastRemoteUpdated) return false;
+      adminConfig=adminMergeDefaults(clone(data.config),adminClone(ADMIN_DEFAULT));
+      Object.entries(crops).forEach(([id,c])=>{adminConfig.farm.crops[id]=adminConfig.farm.crops[id]||{name:c.name,icon:c.icon,cost:c.cost,sell:c.sell,growMs:c.growMs,enabled:true,currency:'coin'};});
+      ensureAdminLoginRewards();
+      syncLoginRewardConfigToGame();
+      applyAdminConfig();
+      try{localStorage.setItem(ADMIN_KEY,JSON.stringify(adminConfig));}catch(_){}
+      lastRemoteUpdated=stamp;
+      try{ if(document.getElementById('adminPanel') && !document.getElementById('adminPanel').classList.contains('hidden')) renderAdmin(); }catch(_){}
       return true;
-    }catch(e){console.error('[V213] server admin pull failed',e);return false;}
-    finally{pulling=false;}
+    }catch(e){ console.warn('Shared admin config load failed:',e?.message||e); return false; }
+    finally{ loading=false; }
   }
-  async function pushAndVerify(){
+
+  async function pushSharedAdminConfig(){
     const c=client();
-    if(!c)throw new Error('Supabase client not connected');
-    const payload=clone(adminConfig);
-    const now=new Date().toISOString();
-    const {data,error}=await c.from(TABLE).upsert({id:ID,config:payload,updated_at:now},{onConflict:'id'}).select('config,updated_at').single();
-    if(error)throw error;
-    if(!data||!isRealConfig(data.config))throw new Error('Supabase did not return the saved shared config');
-    // Verify the server returned exactly the config we sent. This prevents a local-only success message.
-    if(stable(data.config)!==stable(payload))throw new Error('Server verification mismatch after admin save');
-    lastStamp=String(data.updated_at||now);
-    return true;
-  }
-
-  // Keep every old game-specific normalization/apply behavior exactly once, but replace all final server-sync wrappers.
-  const legacySave=saveAdminConfig;
-  async function saveAuthoritatively(){
-    if(saving)return false;
-    saving=true;
-    const status=document.getElementById('adminStatus');
+    if(!c) return false;
     try{
-      if(status)status.textContent='⏳ กำลังส่งค่ากลางไปยังเซิร์ฟเวอร์...';
-      const result=legacySave.apply(this,arguments);
-      if(result&&typeof result.then==='function')await result;
-      await pushAndVerify();
-      applySharedConfig('local-save-verified');
-      if(status)status.textContent='🌐 บันทึกสำเร็จบนเซิร์ฟเวอร์และตรวจสอบข้อมูลแล้ว';
+      const payload={id:ROW_ID,config:clone(adminConfig),updated_at:new Date().toISOString()};
+      const {data,error}=await c.from(TABLE).upsert(payload,{onConflict:'id'}).select('updated_at').single();
+      if(error) throw error;
+      lastRemoteUpdated=String(data?.updated_at||payload.updated_at);
       return true;
-    }catch(e){
-      console.error('[V213] ADMIN SERVER SAVE FAILED',e);
-      if(status)status.textContent='❌ เซฟเซิร์ฟเวอร์ไม่สำเร็จ · ค่ากลางยังไม่ถูกยืนยัน';
-      alert('บันทึกบนเซิร์ฟเวอร์ไม่สำเร็จ: '+(e?.message||e));
-      return false;
-    }finally{saving=false;}
+    }catch(e){ console.warn('Shared admin config save failed:',e?.message||e); return false; }
   }
-  saveAdminConfig=saveAuthoritatively;
-  window.__farmAuthoritativeAdmin={pull,push:pushAndVerify,save:saveAuthoritatively};
 
-  // Remove stale direct button listeners by replacing the button with a clone, then bind exactly one handler.
-  function bindSaveButton(){
-    const old=document.getElementById('adminSave');
-    if(!old||old.dataset.v213Bound==='1')return;
-    const btn=old.cloneNode(true);
-    btn.dataset.v213Bound='1';
-    old.replaceWith(btn);
-    btn.addEventListener('click',async e=>{e.preventDefault();await saveAuthoritatively();});
-  }
-  const oldRenderAdmin=renderAdmin;
-  renderAdmin=function(){const out=oldRenderAdmin.apply(this,arguments);bindSaveButton();return out;};
-  bindSaveButton();
+  // Catch the FINAL saveAdminConfig implementation, including all V99-V209 wrappers.
+  const previousSaveAdminConfig=saveAdminConfig;
+  saveAdminConfig=function(){
+    const result=previousSaveAdminConfig.apply(this,arguments);
+    pushSharedAdminConfig();
+    return result;
+  };
 
-  async function boot(){
-    if(booted)return;
-    const c=client(); if(!c){setTimeout(boot,250);return;}
-    booted=true;
-    await pull('initial');
+  // Login reward cycle promotion also changes global admin configuration.
+  const previousEnsureLoginRewardState=ensureLoginRewardState;
+  ensureLoginRewardState=function(){
+    const before=JSON.stringify(adminConfig?.loginRewards||{});
+    const result=previousEnsureLoginRewardState.apply(this,arguments);
+    if(before!==JSON.stringify(adminConfig?.loginRewards||{})) pushSharedAdminConfig();
+    return result;
+  };
+
+  // Secondary admin tower rewards are also server-wide.
+  const previousSaveTowerRewards=saveTowerRewardsFromSecondaryAdmin;
+  saveTowerRewardsFromSecondaryAdmin=function(floor,rows){
+    previousSaveTowerRewards.apply(this,arguments);
+    const c=client();
+    if(c){
+      const config=loadGlobalTowerRewardConfig();
+      c.from(TOWER_TABLE).upsert({key:TOWER_KEY,config:clone(config),updated_at:new Date().toISOString()},{onConflict:'key'}).then(({error})=>{if(error)console.warn('Shared tower config save failed:',error.message);});
+    }
+  };
+
+  async function pullSharedTowerConfig(){
+    const c=client(); if(!c) return;
     try{
-      c.channel('farm-v213-clean-admin-sync')
-       .on('postgres_changes',{event:'INSERT',schema:'public',table:TABLE,filter:'id=eq.1'},()=>pull('realtime-insert'))
-       .on('postgres_changes',{event:'UPDATE',schema:'public',table:TABLE,filter:'id=eq.1'},()=>pull('realtime-update'))
-       .subscribe();
-    }catch(e){console.warn('[V213] realtime unavailable; polling remains active',e);}
-    pollId=setInterval(()=>pull('poll'),2000);
+      const {data,error}=await c.from(TOWER_TABLE).select('config').eq('key',TOWER_KEY).maybeSingle();
+      if(error||!data?.config||typeof data.config!=='object') return;
+      localStorage.setItem(TOWER_GLOBAL_REWARD_CONFIG_KEY,JSON.stringify(data.config));
+      try{renderTowerFloorSelect(true);}catch(_){}
+    }catch(_){}
   }
-  boot();
+
+  // Initial load: server data is authoritative whenever it exists.
+  setTimeout(()=>{ pullSharedAdminConfig(true); pullSharedTowerConfig(); },350);
+
+  // Polling keeps every player in sync even when Realtime is not enabled in Supabase.
+  setInterval(()=>{
+    const now=Date.now(); if(now-lastPoll<4500)return; lastPoll=now;
+    pullSharedAdminConfig(false); pullSharedTowerConfig();
+  },5000);
+
+  window.addEventListener('storage',e=>{
+    if(e.key===ADMIN_KEY){ try{pullSharedAdminConfig(true);}catch(_){} }
+  });
+
+  window.__farmSharedAdmin={pull:()=>pullSharedAdminConfig(true),push:pushSharedAdminConfig};
 })();
