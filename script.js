@@ -9366,6 +9366,15 @@ saveState();
   window.v115LoadDirectory=v115LoadDirectory;
   window.v115SaveDirectory=v115SaveDirectory;
   window.v115SnapshotCurrent=v115SnapshotCurrent;
+  // V224: expose V164 mailbox helpers to later online-sync patches.
+  window.v164LoadMail=v164LoadMail;
+  window.v164SaveMail=v164SaveMail;
+  window.v164CreateServerGift=v164CreateServerGift;
+  window.v164CurrentUserKey=v164CurrentUserKey;
+  window.v164UnclaimedGifts=v164UnclaimedGifts;
+  window.v164RefreshMailboxIndicator=v164RefreshMailboxIndicator;
+  window.v164RenderMailbox=v164RenderMailbox;
+  window.v164OpenMailbox=v164OpenMailbox;
 })();
 
 /* V221 — bridge V115 helpers to later version scopes */
@@ -12020,4 +12029,24 @@ var v115SnapshotCurrent = window.v115SnapshotCurrent;
   console.log('[V223] startup OK — Supabase:', !!window.supabaseClient,
               'v115Grant:', typeof window.v115Grant==='function',
               'v115Catalog:', typeof window.v115Catalog==='function');
+})();
+
+
+/* =========================================================
+   V224 — MAILBOX SCOPE BRIDGE
+   ========================================================= */
+(()=>{
+  window.__farmV224={
+    version:'V224',
+    supabaseReady:!!window.supabaseClient,
+    v164LoadMailReady:typeof window.v164LoadMail==='function',
+    v164SaveMailReady:typeof window.v164SaveMail==='function',
+    v164CreateServerGiftReady:typeof window.v164CreateServerGift==='function',
+    v115GrantReady:typeof window.v115Grant==='function'
+  };
+  console.log('[V224] mailbox bridge:',
+    'load=',typeof window.v164LoadMail==='function',
+    'save=',typeof window.v164SaveMail==='function',
+    'create=',typeof window.v164CreateServerGift==='function',
+    'Supabase=',!!window.supabaseClient);
 })();
